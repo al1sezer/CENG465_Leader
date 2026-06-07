@@ -3,7 +3,7 @@ import uuid
 import time
 from datetime import datetime
 from db_config import LEADER_DB, FOLLOWER_DB
-from logger import log_operation
+from logger import log_operation, log_info
 from utils import save_to_csv, save_to_json, print_table
 
 def run_eventual_consistency_experiment(iterations=10):
@@ -12,6 +12,7 @@ def run_eventual_consistency_experiment(iterations=10):
     Inserts new movies to the Leader and measures the time it takes for each to become visible in the Follower
     (replication lag) with millisecond precision.
     """
+    log_info("START: Eventual Consistency Experiment (Lag Test) initiated", node="Exp1")
     print("\n" + "=" * 60)
     print("🧪 EXPERIMENT 1: EVENTUAL CONSISTENCY (Replication Lag)")
     print("=" * 60)
@@ -27,6 +28,7 @@ def run_eventual_consistency_experiment(iterations=10):
         duration = 120 + i
         operation_id = str(uuid.uuid4())
         
+        log_info(f"[{i}/{iterations}] Writing movie: '{movie_title}' to Leader...", node="Exp1")
         print(f"\n[{i}/{iterations}] Adding movie: '{movie_title}'...")
         
         # 1. Write to Leader DB (INSERT)
@@ -82,6 +84,7 @@ def run_eventual_consistency_experiment(iterations=10):
         if t_visible:
             # Replication lag: The difference between the time data is visible in the Follower and the time it was written to the Leader
             lag_ms = (t_visible - t_write_start).total_seconds() * 1000.0
+            log_info(f"[{i}/{iterations}] Replicated to Follower! (Attempts: {attempts}, Lag: {lag_ms:.2f}ms)", node="Exp1")
             print(f"   -> Success! Data appeared in the Follower after {attempts} attempts.")
             print(f"   -> Leader Write Time: {t_write_start.strftime('%H:%M:%S.%f')[:-3]}")
             print(f"   -> Follower Appearance Time: {t_visible.strftime('%H:%M:%S.%f')[:-3]}")
@@ -89,6 +92,7 @@ def run_eventual_consistency_experiment(iterations=10):
             
             results.append([i, record_id, movie_title, t_write_start, t_visible, attempts, round(lag_ms, 2)])
         else:
+            log_info(f"[{i}/{iterations}] ERROR: Replication timeout on Follower after 15s!", node="Exp1")
             print("   ❌ ERROR: Data did not reach the Follower within 15 seconds!")
             results.append([i, record_id, movie_title, t_write_start, "TIMEOUT", attempts, -1])
             
@@ -104,6 +108,7 @@ def run_eventual_consistency_experiment(iterations=10):
     else:
         min_lag = max_lag = avg_lag = 0
         
+    log_info(f"SUMMARY: Avg Lag = {avg_lag:.2f}ms (Min: {min_lag:.2f}ms, Max: {max_lag:.2f}ms)", node="Exp1")
     headers = ["Iteration", "Record ID", "Movie Title", "Write Time (L)", "Visible Time (F)", "Query Count", "Lag (ms)"]
     print_table(headers, results)
     
@@ -113,6 +118,7 @@ def run_eventual_consistency_experiment(iterations=10):
     print(f"  Maximum Lag (Max Lag): {max_lag:.2f} ms")
     print(f"  Average Lag (Avg Lag): {avg_lag:.2f} ms")
     print("=" * 60)
+
     
     # Save data to disk
     save_to_csv("eventual_results.csv", headers, results)

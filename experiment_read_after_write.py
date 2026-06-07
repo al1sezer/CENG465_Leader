@@ -3,7 +3,7 @@ import uuid
 import time
 from datetime import datetime
 from db_config import LEADER_DB, FOLLOWER_DB
-from logger import log_operation
+from logger import log_operation, log_info
 from utils import save_to_csv, save_to_json, print_table
 
 def run_read_after_write_experiment(iterations=10):
@@ -14,6 +14,7 @@ def run_read_after_write_experiment(iterations=10):
       2. Tests if the data is immediately visible when reading from the Follower (potential RAW violation).
     Measures the visibility lag of the data on the Follower.
     """
+    log_info("START: Read-After-Write (RAW) Consistency Experiment initiated", node="Exp3")
     print("\n" + "=" * 60)
     print("🧪 EXPERIMENT 3: READ-AFTER-WRITE CONSISTENCY (Read-Your-Own-Writes)")
     print("=" * 60)
@@ -42,6 +43,7 @@ def run_read_after_write_experiment(iterations=10):
         seat_id = 2 + i  # Seats: 3, 4, 5, ..., 12
         customer_name = f"RAW_Customer_{int(time.time())}_{i}"
         
+        log_info(f"[{i}/{iterations}] Creating reservation on Leader: Customer={customer_name}, SeatID={seat_id}...", node="Exp3")
         print(f"\n[{i}/{iterations}] Creating reservation: Customer={customer_name}, SeatID={seat_id}...")
         
         # A. WRITING TO LEADER
@@ -113,6 +115,11 @@ def run_read_after_write_experiment(iterations=10):
             follower_lag_ms = (follower_visible_time - t_write).total_seconds() * 1000.0
             violation = "VIOLATION (Could not see own write!)" if not first_read_visible else "NORMAL (Saw instantly)"
             
+            if not first_read_visible:
+                log_info(f"[{i}/{iterations}] RAW Violation! Delayed on Follower. Visible after {attempts} attempts / {follower_lag_ms:.2f}ms", node="Exp3")
+            else:
+                log_info(f"[{i}/{iterations}] RAW Secured! Visible on Follower immediately", node="Exp3")
+                
             print(f"   -> Leader Read  : {'VISIBLE' if leader_visible else 'ERROR'} ({leader_lag_ms:.2f} ms)")
             print(f"   -> Follower First Read: {'VISIBLE' if first_read_visible else 'NOT FOUND'}")
             print(f"   -> Follower Lag    : {follower_lag_ms:.2f} ms ({attempts} attempts)")
@@ -127,6 +134,7 @@ def run_read_after_write_experiment(iterations=10):
                 violation
             ])
         else:
+            log_info(f"[{i}/{iterations}] ERROR: Record did not replicate on Follower within 10 seconds timeout!", node="Exp3")
             print("   ❌ ERROR: Record did not appear on Follower within 10 seconds!")
             results.append([i, res_id, customer_name, leader_lag_ms, "No", -1, attempts, "TIMEOUT"])
             
@@ -143,6 +151,7 @@ def run_read_after_write_experiment(iterations=10):
     valid_follower_lags = [r[5] for r in results if r[5] > 0]
     avg_follower_lag = sum(valid_follower_lags) / len(valid_follower_lags) if valid_follower_lags else 0
     
+    log_info(f"SUMMARY: Violations: {violations_count}/{total_runs} ({violation_rate:.1f}%), Avg Lag: {avg_follower_lag:.2f}ms", node="Exp3")
     print("=" * 60)
     print("📊 READ-AFTER-WRITE SUMMARY REPORT:")
     print(f"  Total Attempt Count           : {total_runs}")
@@ -151,6 +160,7 @@ def run_read_after_write_experiment(iterations=10):
     print(f"  Average Follower Visibility Lag : {avg_follower_lag:.2f} ms")
     print(f"  Leader RAW Violation Count    : 0 (Always sees own write instantly)")
     print("=" * 60)
+
     
     # Save to files
     save_to_csv("raw_results.csv", headers, results)

@@ -4,7 +4,7 @@ import time
 import threading
 from datetime import datetime
 from db_config import LEADER_DB, FOLLOWER_DB
-from logger import log_operation
+from logger import log_operation, log_info
 from utils import save_to_csv, save_to_json, print_table
 
 def run_monotonic_reads_experiment():
@@ -14,6 +14,7 @@ def run_monotonic_reads_experiment():
     2. Multi-Node Read (Leader -> Follower): Demonstrates how a client that first reads from the up-to-date Leader and immediately after
        from a lagged Follower violates the 'Monotonic Reads' rule by seeing an older version of the data.
     """
+    log_info("START: Monotonic Reads Experiment initiated", node="Exp2")
     print("\n" + "=" * 60)
     print("🧪 EXPERIMENT 2: MONOTONIC READS (Single Node vs Multi-Node Reads)")
     print("=" * 60)
@@ -41,6 +42,7 @@ def run_monotonic_reads_experiment():
     
     print(f"Preparation complete. Reservation ID: {res_id} (Seat B1) created.")
     print("Starting 10 rapid updates on the Leader. Concurrent reads will be performed on the Follower...")
+    log_info(f"Writer thread initialized. Starting rapid updates on reservation ID: {res_id}...", node="Exp2")
     
     follower_reads_only = []  # Reads from Follower only
     cross_node_reads = []      # Cross-node reads (Leader -> Follower)
@@ -68,6 +70,7 @@ def run_monotonic_reads_experiment():
                 "customer_name": f"Client V{version}",
                 "version": version
             })
+            log_info(f"Writer: Updated reservation {res_id} version to v{version} on Leader", node="Exp2")
             
             # Rapid sequential updates (100ms interval)
             time.sleep(0.1)
@@ -128,6 +131,8 @@ def run_monotonic_reads_experiment():
         # Violation check: Is the version read from Leader greater than that of the Follower?
         # (Meaning, did the client read stale data from a lagged server after seeing up-to-date data?)
         violation_cross = "VIOLATION (Monotonic Reads Violation!)" if f_immediate_version < l_version else "NORMAL"
+        if f_immediate_version < l_version:
+            log_info(f"Violation Detected: Leader v{l_version} but Follower immediate read returned v{f_immediate_version} (stale!)", node="Exp2")
         
         cross_node_reads.append([
             read_count, 
@@ -153,7 +158,7 @@ def run_monotonic_reads_experiment():
     headers_a = ["Read No", "Time", "Read Version (F)", "Data Content", "Previous Version", "Status"]
     print_table(headers_a, follower_reads_only[:15]) # Print first 15 records
     
-    print("\n📊 TEST B: SEQUENTIAL CROSS-NODE READS (LEADER -> FOLLOWER) (Multi-Node)")
+    print("\n" + "📊 TEST B: SEQUENTIAL CROSS-NODE READS (LEADER -> FOLLOWER) (Multi-Node)")
     print("Expected: Immediately after reading the latest version from Leader, an older version may be read from the lagged Follower (VIOLATION).")
     headers_b = ["Read No", "Time", "Leader Version", "Follower Version", "Status"]
     print_table(headers_b, cross_node_reads[:15]) # Print first 15 records
@@ -162,6 +167,7 @@ def run_monotonic_reads_experiment():
     follower_violations = sum(1 for r in follower_reads_only if r[5] == "VIOLATION")
     cross_violations = sum(1 for r in cross_node_reads if "VIOLATION" in r[4])
     
+    log_info(f"SUMMARY: Single-node violations: {follower_violations}, Multi-node violations: {cross_violations}", node="Exp2")
     print("=" * 60)
     print("📊 SUMMARY STATISTICS:")
     print(f"  Single Node (Follower Only) Violation Count  : {follower_violations} (Expected: 0)")
@@ -179,6 +185,7 @@ def run_monotonic_reads_experiment():
             "single_node_violations": follower_violations,
             "cross_node_violations": cross_violations
         },
+
         "details_single": [
             {
                 "read_no": r[0],

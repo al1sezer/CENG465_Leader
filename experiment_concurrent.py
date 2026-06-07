@@ -4,7 +4,7 @@ import time
 import threading
 from datetime import datetime
 from db_config import LEADER_DB, FOLLOWER_DB
-from logger import log_operation
+from logger import log_operation, log_info
 from utils import save_to_csv, save_to_json, print_table
 
 def run_concurrent_writes_experiment():
@@ -18,6 +18,7 @@ def run_concurrent_writes_experiment():
              in the same showtime (Hall A, Seat B5 = SeatID: 10) at the exact same millisecond. Demonstrates how
              application-level checks (select-then-insert) without locking or database-level constraints lead to Double Booking.
     """
+    log_info("START: Concurrent Writes & Race Condition Experiment initiated", node="Exp4")
     print("\n" + "=" * 60)
     print("🧪 EXPERIMENT 4: CONCURRENT WRITES & RACE CONDITION")
     print("=" * 60)
@@ -25,6 +26,7 @@ def run_concurrent_writes_experiment():
     # ============================================================================
     # PART 1: ORDERING PRESERVATION (GLOBAL ORDERING)
     # ============================================================================
+    log_info("Part 1: Ordering Preservation Test (20 Parallel Threads) Started...", node="Exp4")
     print("\n[PART 1] Ordering Preservation Test (20 Parallel Threads) Started...")
     showtime_id = 1
     
@@ -75,6 +77,7 @@ def run_concurrent_writes_experiment():
                 "customer_name": customer,
                 "operation_id": op_id
             })
+            log_info(f"Thread {thread_idx} wrote reservation ID {res_id} (Seat ID: {seat_id})", node="Exp4")
             
             cur.close()
             conn.close()
@@ -106,6 +109,7 @@ def run_concurrent_writes_experiment():
     leader_commits.sort(key=lambda x: x["commit_time"])
     
     # Wait 3 seconds for replication
+    log_info("Operations completed on Leader. Waiting 3 seconds for replication sequence verification...", node="Exp4")
     print("Operations completed on the Leader. Waiting 3 seconds for replication...")
     time.sleep(3)
     
@@ -158,10 +162,12 @@ def run_concurrent_writes_experiment():
 
     print("-" * 105)
     print(f"Ordering Violation Count (Out-of-Order Replication): {out_of_order_count} (Expected: 0 - Because WAL is applied sequentially in a single thread!)")
+    log_info(f"Part 1 Verified: Replication order preservation complete. Out-of-order count: {out_of_order_count}", node="Exp4")
     
     # ============================================================================
     # PART 2: RACE CONDITION (RACE CONDITION & DOUBLE BOOKING)
     # ============================================================================
+    log_info("Part 2: Starting race condition booking test on seat 10...", node="Exp4")
     print("\n[PART 2] Conflict (Double Booking / Race Condition) Test Started...")
     print("Target: Two threads will attempt to reserve the exact same seat (Seat B5 = ID: 10) simultaneously.")
     
@@ -232,6 +238,7 @@ def run_concurrent_writes_experiment():
                     "status": status_text,
                     "res_id": res_id
                 })
+            log_info(f"Racer {racer_id} ({customer}) execution completed: {status_text}", node="Exp4")
                 
         except Exception as e:
             with race_results_lock:
@@ -260,6 +267,7 @@ def run_concurrent_writes_experiment():
     print("-" * 75)
     
     double_booked = all(r["status"].startswith("SUCCESS") for r in race_results)
+    log_info(f"Part 2 Analysis: Double Booking Occurred = {double_booked}", node="Exp4")
     if double_booked:
         print("  ⚠️ ANALYSIS: RACE CONDITION OCCURRED!")
         print("  The same seat was reserved for two different users simultaneously (Double Booking!).")
@@ -269,6 +277,7 @@ def run_concurrent_writes_experiment():
         print("  ✅ ANALYSIS: Race condition did not occur (one thread blocked the other).")
         
     print("=" * 60)
+
     
     # Save Results
     headers_order = ["Order", "Write ID", "Customer Name", "Leader Commit", "Follower Log", "Status"]
