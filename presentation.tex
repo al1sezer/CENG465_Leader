@@ -1,0 +1,214 @@
+\documentclass[aspectratio=169]{beamer}
+\usetheme{Madrid} % Academic and clean theme
+\usecolortheme{default}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[english]{babel} % Updated to English
+\usepackage{graphicx}
+\usepackage{listings}
+\usepackage{xcolor}
+
+% Style settings for code blocks
+\lstset{
+    basicstyle=\ttfamily\footnotesize,
+    backgroundcolor=\color{gray!10},
+    frame=single,
+    breaklines=true,
+    keywordstyle=\color{blue},
+    stringstyle=\color{red}
+}
+
+% TEXT INSIDE SQUARE BRACKETS APPEARS IN THE FOOTER
+\title[Single-Leader Replication]{Single-Leader Replication in a Cloud-Based Distributed System}
+\subtitle{CENG 465 Project Progress Presentation}
+\author[Ali Ekin Özçetin \& Ali Sezer Uysal]{Ali Ekin Özçetin \and Ali Sezer Uysal}
+\institute[CENG 465]{CENG 465 - Principles of Data-Intensive Systems}
+\date{May 5, 2026}
+
+\begin{document}
+
+% --- SLIDE 1: TITLE ---
+% Presenter: Leader
+\begin{frame}
+    \titlepage
+\end{frame}
+
+% --- SLIDE 2: CLOUD ARCHITECTURE ---
+% Presenter: Leader
+\begin{frame}{Cloud Architecture and Infrastructure Setup}
+    \begin{itemize}
+        \item To simulate real-world network latency, two separate virtual machines (VMs) were deployed on Azure.
+        \item The system is not confined to a local network or a single Docker environment (Distributed Environment Requirement fulfilled).
+    \end{itemize}
+    \vspace{0.3cm}
+    \begin{center}
+        \includegraphics[width=0.8\linewidth, height=0.5\textheight, keepaspectratio]{slayt2.png}
+    \end{center}
+\end{frame}
+
+% --- SLIDE 3: DATABASE SCHEMA ---
+% Presenter: Leader
+\begin{frame}[fragile]{Database Schema and Version Control}
+    \begin{itemize}
+        \item Specific tracking fields were added to the schema to monitor data updates.
+        \item \texttt{version}, \texttt{last\_updated}, and \texttt{operation\_id} are maintained for each record.
+    \end{itemize}
+    
+    \begin{lstlisting}[language=SQL, caption=Update Operation Snippet]
+UPDATE data 
+SET value = %s, version = version + 1, last_updated = %s, operation_id = %s 
+WHERE id = %s;
+    \end{lstlisting}
+
+    \begin{columns}
+        \begin{column}{0.48\textwidth}
+            \centering
+            \textbf{Data Table Schema} \\
+            \vspace{0.1cm}
+            \includegraphics[width=\linewidth, height=0.25\textheight, keepaspectratio]{data_table.png}
+        \end{column}
+        \begin{column}{0.48\textwidth}
+            \centering
+            \textbf{Replication Log Schema} \\
+            \vspace{0.1cm}
+            \includegraphics[width=\linewidth, height=0.25\textheight, keepaspectratio]{replication_log_table.png}
+        \end{column}
+    \end{columns}
+\end{frame}
+
+% --- SLIDE 4: REPLICATION LOGGING ---
+% Presenter: Leader
+\begin{frame}{Replication Logging}
+    \begin{itemize}
+        \item \textbf{Millisecond Precision:} Logs are recorded with millisecond precision to accurately measure latency.
+        \item Every read/write operation is asynchronously written to the \texttt{crud.log} file.
+    \end{itemize}
+    \vspace{0.3cm}
+    \begin{center}
+        \includegraphics[width=0.7\linewidth, height=0.35\textheight, keepaspectratio]{crud_log.png}
+    \end{center}
+\end{frame}
+
+%% --- SLIDE 5: DATA OPERATIONS ---
+% Presenter: Follower
+\begin{frame}[fragile]{Data Operations (Leader Operations)}
+    \begin{columns}
+        \begin{column}{0.40\textwidth}
+            \begin{itemize}
+                \item Sequential \textbf{INSERT}, \textbf{UPDATE}, and \textbf{DELETE} operations are executed on the Leader.
+                \item The autonomous Python script pauses for user input, allowing for a controlled, step-by-step demonstration.
+                \item Batch inserts (\texttt{TestValue\_2}, \texttt{TestValue\_3}) showcase rapid replication.
+            \end{itemize}
+        \end{column}
+        \begin{column}{0.58\textwidth}
+            \begin{lstlisting}[language=Python, showstringspaces=false, showspaces=false, basicstyle=\ttfamily\scriptsize]
+new_id = insert_data("TestValue_1", "CENG1")
+input("INSERT 1 completed, press ENTER...")
+
+update_data(new_id, "CENG465")
+input("UPDATE completed, press ENTER...")
+
+delete_data(new_id)
+input("DELETE completed, press ENTER...")
+
+insert_data("TestValue_2", "CENG2")
+input("INSERT 2 completed, press ENTER...")
+
+insert_data("TestValue_3", "CENG3")
+print("INSERT 3 completed")
+            \end{lstlisting}
+        \end{column}
+    \end{columns}
+\end{frame}
+
+% --- SLIDE 6: EVIDENCE OF REPLICATION ---
+% Presenter: Follower
+\begin{frame}{Evidence of Replication}
+    \begin{columns}
+        \begin{column}{0.45\textwidth}
+            \centering
+            \textbf{Leader (Primary) Node} \\
+            \vspace{0.2cm}
+            \includegraphics[width=\linewidth, height=0.7\textheight, keepaspectratio]{leade_crud.png}
+        \end{column}
+        \begin{column}{0.45\textwidth}
+            \centering
+            \textbf{Follower (Secondary) Node} \\
+            \vspace{0.2cm}
+            \includegraphics[width=\linewidth, height=0.7\textheight, keepaspectratio]{slayt6_sag.png}
+        \end{column}
+    \end{columns}
+    \vspace{0.1cm}
+    \begin{center}
+        Physical data transfer (Streaming Replication) has been successfully established.
+    \end{center}
+\end{frame}
+
+% --- SLIDE 7: LIVE REPLICATION TEST (NEW) ---
+% Presenter: Follower
+\begin{frame}{Live Replication Test: Manual vs. Automated}
+    \begin{columns}
+        \begin{column}{0.48\textwidth}
+            \centering
+            \textbf{Data Table After CRUD} \\
+            \vspace{0.2cm}
+            \includegraphics[width=\linewidth, height=0.6\textheight, keepaspectratio]{data_table_after_crud.png}
+        \end{column}
+        \begin{column}{0.48\textwidth}
+            \centering
+            \textbf{Replication Log After CRUD} \\
+            \vspace{0.2cm}
+            \includegraphics[width=\linewidth, height=0.6\textheight, keepaspectratio]{replication_log_after_crud.png}
+        \end{column}
+    \end{columns}
+    \vspace{0.3cm}
+    \begin{center}
+        Real-time monitoring successfully captures \texttt{INSERT}, \texttt{UPDATE}, and \texttt{DELETE} events along with operation latencies.
+    \end{center}
+\end{frame}
+
+
+% --- SLIDE 8: LATENCY MEASUREMENT (Shifted from 7) ---
+% Presenter: Follower
+\begin{frame}{Visibility of Updates and Latency Measurement}
+    \begin{itemize}
+        \item The Follower actively monitors the \texttt{replication\_log} and accurately captures operation IDs generated by the Leader.
+        \item The measured network latency is explicitly calculated by comparing the generation time on the Leader and the precise reading time on the Follower node.
+    \end{itemize}
+    \vspace{0.2cm}
+    \begin{center}
+        \includegraphics[width=0.7\linewidth, height=0.35\textheight, keepaspectratio]{slayt8.png}
+    \end{center}
+\end{frame}
+
+% --- SLIDE 9: READ-ONLY EVIDENCE (Shifted from 8) ---
+% Presenter: Follower
+\begin{frame}{Architectural Security: "Read-Only" Enforcement}
+    \begin{itemize}
+        \item \textbf{Single-Leader Constraint:} To guarantee data integrity and eliminate split-brain issues, the Follower instance is constrained to operate strictly in Read-Only mode.
+        \item As demonstrated, direct data manipulation attempts (e.g., \texttt{DELETE}) on the Follower are explicitly blocked and strictly rejected by the PostgreSQL engine.
+    \end{itemize}
+    \vspace{0.2cm}
+    \begin{center}
+        \includegraphics[width=0.7\linewidth, height=0.3\textheight, keepaspectratio]{slayt9.png}
+    \end{center}
+\end{frame}
+
+% --- SLIDE 10: CONCLUSION (Shifted from 9) ---
+% Presenter: Both
+\begin{frame}{Current Progress \& Conclusion}
+    \begin{itemize}
+        \item Distributed environment setup utilizing distinct Azure VMs has been fully realized.
+        \item Database synchronization, coupled with meticulous schema design (\texttt{version}, \texttt{uuid}, \texttt{timestamp}), is operating smoothly.
+        \item A real-time listener script (\texttt{follower\_ops.py}) successfully catches Leader operations and calculates millisecond-accurate network latencies.
+        \item Read-only compliance on the Follower node has been rigorously tested and verified.
+    \end{itemize}
+    \vspace{1cm}
+    \begin{center}
+        \Large \textbf{Thank You}\\
+        \normalsize Any Questions?
+    \end{center}
+\end{frame}
+
+\end{document}

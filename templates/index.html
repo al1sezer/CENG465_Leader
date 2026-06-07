@@ -1,0 +1,1442 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CENG 465 - Cinema Single-Leader Replication Control Center</title>
+    <meta name="description" content="Distributed database replication dashboard demonstrating consistency models and lag experiments.">
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+    <!-- FontAwesome for Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <style>
+        :root {
+            --bg-primary: #08090C;
+            --bg-secondary: #10121A;
+            --bg-glass: rgba(16, 18, 26, 0.6);
+            --border-glass: rgba(255, 255, 255, 0.08);
+            --text-primary: #F3F4F6;
+            --text-secondary: #9CA3AF;
+            --accent-purple: #8B5CF6;
+            --accent-blue: #3B82F6;
+            --accent-neon: #10B981;
+            --accent-orange: #F59E0B;
+            --accent-red: #EF4444;
+            --font-main: 'Outfit', sans-serif;
+            --font-mono: 'JetBrains Mono', monospace;
+            --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background-color: var(--bg-primary);
+            color: var(--text-primary);
+            font-family: var(--font-main);
+            overflow-x: hidden;
+            background-image: 
+                radial-gradient(at 10% 20%, rgba(139, 92, 246, 0.08) 0px, transparent 50%),
+                radial-gradient(at 90% 80%, rgba(59, 130, 246, 0.08) 0px, transparent 50%);
+            background-attachment: fixed;
+        }
+
+        /* Layout Structure */
+        .app-container {
+            display: flex;
+            min-height: 100vh;
+        }
+
+        /* Sidebar */
+        aside {
+            width: 280px;
+            background-color: var(--bg-secondary);
+            border-right: 1px solid var(--border-glass);
+            display: flex;
+            flex-direction: column;
+            padding: 2rem 1.5rem;
+            position: fixed;
+            height: 100vh;
+            z-index: 100;
+        }
+
+        .logo-area {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 2.5rem;
+        }
+
+        .logo-area i {
+            font-size: 1.8rem;
+            background: linear-gradient(135deg, var(--accent-purple), var(--accent-blue));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .logo-area h1 {
+            font-size: 1.4rem;
+            font-weight: 800;
+            letter-spacing: -0.5px;
+            background: linear-gradient(135deg, #fff, #a78bfa);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .menu-list {
+            list-style: none;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .menu-item button {
+            width: 100%;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            padding: 12px 16px;
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            font-family: var(--font-main);
+            font-size: 1rem;
+            font-weight: 500;
+            text-align: left;
+            cursor: pointer;
+            border-radius: 12px;
+            transition: var(--transition);
+        }
+
+        .menu-item button:hover {
+            color: var(--text-primary);
+            background-color: rgba(255, 255, 255, 0.03);
+            transform: translateX(4px);
+        }
+
+        .menu-item.active button {
+            color: #fff;
+            background: linear-gradient(135deg, rgba(139, 92, 246, 0.2), rgba(59, 130, 246, 0.2));
+            border: 1px solid rgba(139, 92, 246, 0.3);
+            box-shadow: 0 4px 20px rgba(139, 92, 246, 0.15);
+        }
+
+        .menu-item.active button i {
+            color: #a78bfa;
+        }
+
+        .sidebar-footer {
+            margin-top: auto;
+            border-top: 1px solid var(--border-glass);
+            padding-top: 1.5rem;
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+        }
+
+        .sidebar-footer p {
+            margin-bottom: 5px;
+        }
+
+        .node-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            background: rgba(16, 185, 129, 0.1);
+            color: var(--accent-neon);
+            border: 1px solid rgba(16, 185, 129, 0.2);
+            margin-top: 10px;
+        }
+
+        /* Main Content Panel */
+        main {
+            margin-left: 280px;
+            flex-grow: 1;
+            padding: 2.5rem;
+            max-width: 1400px;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 2.5rem;
+            border-bottom: 1px solid var(--border-glass);
+            padding-bottom: 1.5rem;
+        }
+
+        .header-title h2 {
+            font-size: 2rem;
+            font-weight: 700;
+            letter-spacing: -0.5px;
+        }
+
+        .header-title p {
+            color: var(--text-secondary);
+            margin-top: 5px;
+            font-size: 0.95rem;
+        }
+
+        .vm-status-area {
+            display: flex;
+            gap: 15px;
+        }
+
+        .vm-badge {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-glass);
+            padding: 10px 16px;
+            border-radius: 12px;
+            font-size: 0.85rem;
+        }
+
+        .vm-badge .dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: var(--accent-neon);
+            box-shadow: 0 0 10px var(--accent-neon);
+        }
+
+        .vm-badge.follower .dot {
+            background-color: var(--accent-blue);
+            box-shadow: 0 0 10px var(--accent-blue);
+        }
+
+        /* Stat Cards Row */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 1.5rem;
+            margin-bottom: 2.5rem;
+        }
+
+        .stat-card {
+            background: var(--bg-glass);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid var(--border-glass);
+            border-radius: 16px;
+            padding: 1.5rem;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+            overflow: hidden;
+            transition: var(--transition);
+        }
+
+        .stat-card:hover {
+            transform: translateY(-5px);
+            border-color: rgba(139, 92, 246, 0.3);
+            box-shadow: 0 10px 30px rgba(139, 92, 246, 0.08);
+        }
+
+        .stat-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 4px;
+            height: 100%;
+            background: linear-gradient(to bottom, var(--accent-purple), var(--accent-blue));
+        }
+
+        .stat-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+            font-weight: 500;
+        }
+
+        .stat-header i {
+            font-size: 1.2rem;
+            color: var(--accent-purple);
+        }
+
+        .stat-value {
+            font-size: 2.2rem;
+            font-weight: 800;
+            margin: 10px 0 5px 0;
+            letter-spacing: -1px;
+            background: linear-gradient(135deg, #fff, #cbd5e1);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .stat-desc {
+            font-size: 0.8rem;
+            color: var(--accent-neon);
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .stat-desc.danger {
+            color: var(--accent-red);
+        }
+
+        /* Panel Pages */
+        .panel-page {
+            display: none;
+            animation: fadeIn 0.4s ease-out;
+        }
+
+        .panel-page.active {
+            display: block;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Glassmorphic Panel Cards */
+        .glass-panel {
+            background: var(--bg-glass);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid var(--border-glass);
+            border-radius: 16px;
+            padding: 2rem;
+            margin-bottom: 2rem;
+            position: relative;
+        }
+
+        .panel-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.5rem;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            padding-bottom: 1rem;
+        }
+
+        .panel-title {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .panel-title i {
+            font-size: 1.5rem;
+            color: var(--accent-purple);
+        }
+
+        .panel-title h3 {
+            font-size: 1.25rem;
+            font-weight: 700;
+        }
+
+        .panel-actions {
+            display: flex;
+            gap: 10px;
+        }
+
+        /* Interactive Buttons */
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 20px;
+            border-radius: 12px;
+            font-family: var(--font-main);
+            font-size: 0.9rem;
+            font-weight: 600;
+            cursor: pointer;
+            border: none;
+            transition: var(--transition);
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, var(--accent-purple), var(--accent-blue));
+            color: #fff;
+            box-shadow: 0 4px 15px rgba(139, 92, 246, 0.3);
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(139, 92, 246, 0.4);
+        }
+
+        .btn-primary:active {
+            transform: translateY(0);
+        }
+
+        .btn-secondary {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--border-glass);
+            color: var(--text-primary);
+        }
+
+        .btn-secondary:hover {
+            background: rgba(255, 255, 255, 0.08);
+            border-color: rgba(255, 255, 255, 0.2);
+        }
+
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none !important;
+            box-shadow: none !important;
+        }
+
+        /* Database State Tables */
+        .table-container {
+            width: 100%;
+            overflow-x: auto;
+            margin-top: 1rem;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            text-align: left;
+        }
+
+        th {
+            padding: 12px 16px;
+            color: var(--text-secondary);
+            font-weight: 600;
+            font-size: 0.85rem;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        td {
+            padding: 14px 16px;
+            font-size: 0.9rem;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+            color: var(--text-primary);
+        }
+
+        tr:last-child td {
+            border-bottom: none;
+        }
+
+        tr:hover td {
+            background-color: rgba(255, 255, 255, 0.01);
+        }
+
+        /* Badges inside tables */
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 3px 8px;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+
+        .badge-insert { background: rgba(16, 185, 129, 0.1); color: var(--accent-neon); border: 1px solid rgba(16, 185, 129, 0.2); }
+        .badge-update { background: rgba(59, 130, 246, 0.1); color: var(--accent-blue); border: 1px solid rgba(59, 130, 246, 0.2); }
+        .badge-delete { background: rgba(239, 68, 68, 0.1); color: var(--accent-red); border: 1px solid rgba(239, 68, 68, 0.2); }
+        
+        .badge-success { background: rgba(16, 185, 129, 0.1); color: var(--accent-neon); }
+        .badge-warning { background: rgba(245, 158, 11, 0.1); color: var(--accent-orange); }
+
+        .op-mono {
+            font-family: var(--font-mono);
+            font-size: 0.8rem;
+            color: var(--accent-purple);
+        }
+
+        /* Live Terminal Block */
+        .terminal-panel {
+            background-color: #050608;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 12px;
+            padding: 1.25rem;
+            box-shadow: inset 0 0 10px rgba(0, 0, 0, 0.8);
+        }
+
+        .terminal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.75rem;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            padding-bottom: 0.5rem;
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+        }
+
+        .terminal-header .dots {
+            display: flex;
+            gap: 6px;
+        }
+
+        .terminal-header .dots span {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background-color: var(--accent-red);
+        }
+
+        .terminal-header .dots span:nth-child(2) { background-color: var(--accent-orange); }
+        .terminal-header .dots span:nth-child(3) { background-color: var(--accent-neon); }
+
+        .terminal-body {
+            height: 250px;
+            overflow-y: auto;
+            font-family: var(--font-mono);
+            font-size: 0.825rem;
+            line-height: 1.5;
+            color: #34D399;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            scroll-behavior: smooth;
+        }
+
+        /* Experiment Showcase grid */
+        .exp-showcase {
+            display: grid;
+            grid-template-columns: 1.2fr 0.8fr;
+            gap: 2rem;
+            margin-top: 1.5rem;
+        }
+
+        .chart-box {
+            background-color: rgba(0, 0, 0, 0.2);
+            border: 1px solid var(--border-glass);
+            border-radius: 12px;
+            padding: 1rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 350px;
+            position: relative;
+        }
+
+        .chart-box img {
+            max-width: 100%;
+            max-height: 100%;
+            border-radius: 8px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+        }
+
+        .chart-placeholder {
+            text-align: center;
+            color: var(--text-secondary);
+        }
+
+        .chart-placeholder i {
+            font-size: 3rem;
+            margin-bottom: 1rem;
+            color: var(--accent-purple);
+            opacity: 0.5;
+        }
+
+        /* Loading Overlay */
+        .loading-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(8, 9, 12, 0.85);
+            backdrop-filter: blur(4px);
+            border-radius: 16px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 10;
+            opacity: 0;
+            pointer-events: none;
+            transition: var(--transition);
+        }
+
+        .loading-overlay.active {
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        .spinner {
+            width: 50px;
+            height: 50px;
+            border: 4px solid rgba(255, 255, 255, 0.05);
+            border-top: 4px solid var(--accent-purple);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-bottom: 1.5rem;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .loading-text {
+            font-size: 1.1rem;
+            font-weight: 600;
+            background: linear-gradient(135deg, #fff, var(--accent-purple));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            animation: pulse 1.5s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 0.6; }
+            50% { opacity: 1; }
+        }
+
+        /* Concurrent Writes Box */
+        .racer-results {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1rem;
+            margin-top: 1rem;
+        }
+
+        .racer-card {
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            border-radius: 12px;
+            padding: 1.25rem;
+            position: relative;
+        }
+
+        .racer-card.success {
+            border-color: rgba(16, 185, 129, 0.2);
+            background: rgba(16, 185, 129, 0.02);
+        }
+
+        .racer-card.failed {
+            border-color: rgba(239, 68, 68, 0.2);
+            background: rgba(239, 68, 68, 0.02);
+        }
+
+        .racer-header {
+            display: flex;
+            justify-content: space-between;
+            font-weight: 700;
+            margin-bottom: 10px;
+        }
+
+        /* Database state grids */
+        .db-grids {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 2rem;
+        }
+
+        .db-panel-col {
+            display: flex;
+            flex-direction: column;
+            gap: 2rem;
+        }
+
+        .db-two-cols {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1.5rem;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="app-container">
+        
+        <!-- Sidebar Navigation -->
+        <aside>
+            <div class="logo-area">
+                <i class="fa-solid fa-server"></i>
+                <h1>Replication Center</h1>
+            </div>
+            
+            <ul class="menu-list">
+                <li class="menu-item active" data-target="page-dashboard">
+                    <button><i class="fa-solid fa-gauge"></i>Dashboard</button>
+                </li>
+                <li class="menu-item" data-target="page-database">
+                    <button><i class="fa-solid fa-database"></i>Database Viewer</button>
+                </li>
+                <li class="menu-item" data-target="page-eventual">
+                    <button><i class="fa-solid fa-clock-rotate-left"></i>Eventual Consistency</button>
+                </li>
+                <li class="menu-item" data-target="page-monotonic">
+                    <button><i class="fa-solid fa-arrow-trend-up"></i>Monotonic Reads</button>
+                </li>
+                <li class="menu-item" data-target="page-raw">
+                    <button><i class="fa-solid fa-book-open"></i>Read-After-Write</button>
+                </li>
+                <li class="menu-item" data-target="page-concurrent">
+                    <button><i class="fa-solid fa-arrows-split-up-and-left"></i>Concurrent Writes</button>
+                </li>
+            </ul>
+            
+            <div class="sidebar-footer">
+                <p>CENG 465 Project Demo</p>
+                <p><strong>Leader node (Write):</strong> 10.0.0.4</p>
+                <p><strong>Follower node (Read):</strong> 10.0.0.5</p>
+                <span class="node-badge"><i class="fa-solid fa-shield-halved"></i> Active Replication</span>
+            </div>
+        </aside>
+
+        <!-- Main Dashboard Panel -->
+        <main>
+            
+            <!-- Header -->
+            <header>
+                <div class="header-title">
+                    <h2 id="header-page-title">Replication Overview</h2>
+                    <p id="header-page-desc">Real-time stats and single-leader streaming replication controller.</p>
+                </div>
+                <div class="vm-status-area">
+                    <div class="vm-badge">
+                        <span class="dot"></span>
+                        <strong>Leader VM</strong> (10.0.0.4)
+                    </div>
+                    <div class="vm-badge follower">
+                        <span class="dot"></span>
+                        <strong>Follower VM</strong> (10.0.0.5)
+                    </div>
+                </div>
+            </header>
+
+            <!-- 1. DASHBOARD PAGE -->
+            <div id="page-dashboard" class="panel-page active">
+                
+                <!-- Metrics -->
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-header">
+                            <span>AVG REPLICATION LAG</span>
+                            <i class="fa-solid fa-bolt"></i>
+                        </div>
+                        <div class="stat-value" id="stat-avg-lag">-</div>
+                        <div class="stat-desc"><i class="fa-solid fa-arrow-down"></i> Within expected limits</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-header">
+                            <span>MONOTONIC READ VIOLATIONS</span>
+                            <i class="fa-solid fa-circle-exclamation"></i>
+                        </div>
+                        <div class="stat-value" id="stat-violations">-</div>
+                        <div class="stat-desc danger"><i class="fa-solid fa-triangle-exclamation"></i> Cross-node reads only</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-header">
+                            <span>RESERVATION COUNT</span>
+                            <i class="fa-solid fa-ticket"></i>
+                        </div>
+                        <div class="stat-value" id="stat-res-count">-</div>
+                        <div class="stat-desc"><i class="fa-solid fa-arrow-up"></i> Database seed active</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-header">
+                            <span>REPLICATION LOG COUNT</span>
+                            <i class="fa-solid fa-list-check"></i>
+                        </div>
+                        <div class="stat-value" id="stat-log-count">-</div>
+                        <div class="stat-desc"><i class="fa-solid fa-arrow-trend-up"></i> Capturing writes</div>
+                    </div>
+                </div>
+
+                <!-- Live Logs & DB quick view -->
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 2rem;">
+                    
+                    <!-- Real-Time Activity Log -->
+                    <div class="glass-panel" style="margin-bottom: 0;">
+                        <div class="panel-header">
+                            <div class="panel-title">
+                                <i class="fa-solid fa-terminal"></i>
+                                <h3>Real-time Activity Log (crud.log)</h3>
+                            </div>
+                            <div class="panel-actions">
+                                <button class="btn btn-secondary" onclick="fetchLogs()"><i class="fa-solid fa-rotate"></i> Refresh</button>
+                            </div>
+                        </div>
+                        <div class="terminal-panel">
+                            <div class="terminal-header">
+                                <div class="dots"><span></span><span></span><span></span></div>
+                                <span>leaderuser@leader-node1:~/ceng465_project</span>
+                            </div>
+                            <div class="terminal-body" id="live-terminal-box">
+                                <!-- Logs will stream here -->
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Quick Database Viewer -->
+                    <div class="glass-panel" style="margin-bottom: 0;">
+                        <div class="panel-header">
+                            <div class="panel-title">
+                                <i class="fa-solid fa-database"></i>
+                                <h3>Quick Replication Log Monitor</h3>
+                            </div>
+                            <button class="btn btn-secondary" onclick="fetchDbState()"><i class="fa-solid fa-rotate"></i> Refresh</button>
+                        </div>
+                        <div class="table-container" style="max-height: 300px; overflow-y: auto;">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Log ID</th>
+                                        <th>Op</th>
+                                        <th>Table</th>
+                                        <th>RecID</th>
+                                        <th>Node</th>
+                                        <th>Timestamp</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="quick-db-log-body">
+                                    <!-- Table records -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                    
+                </div>
+            </div>
+
+            <!-- 2. DATABASE VIEWER PAGE -->
+            <div id="page-database" class="panel-page">
+                <div class="db-grids">
+                    
+                    <div class="db-two-cols">
+                        <!-- Movies Table -->
+                        <div class="glass-panel">
+                            <div class="panel-header">
+                                <div class="panel-title">
+                                    <i class="fa-solid fa-film"></i>
+                                    <h3>Movies (Seed Data)</h3>
+                                </div>
+                            </div>
+                            <div class="table-container">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>ID</th>
+                                            <th>Title</th>
+                                            <th>Genre</th>
+                                            <th>Duration</th>
+                                            <th>Version</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="db-movies-body">
+                                        <!-- Content -->
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                        
+                        <!-- Showtimes Table -->
+                        <div class="glass-panel">
+                            <div class="panel-header">
+                                <div class="panel-title">
+                                    <i class="fa-solid fa-calendar-days"></i>
+                                    <h3>Showtimes</h3>
+                                </div>
+                            </div>
+                            <div class="table-container">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>ID</th>
+                                            <th>Movie</th>
+                                            <th>Hall</th>
+                                            <th>Date & Time</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="db-showtimes-body">
+                                        <!-- Content -->
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Reservations Table -->
+                    <div class="glass-panel">
+                        <div class="panel-header">
+                            <div class="panel-title">
+                                <i class="fa-solid fa-ticket-simple"></i>
+                                <h3>Active Reservations</h3>
+                            </div>
+                        </div>
+                        <div class="table-container">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>ID</th>
+                                        <th>Movie Title</th>
+                                        <th>Hall</th>
+                                        <th>Seat</th>
+                                        <th>Customer</th>
+                                        <th>Status</th>
+                                        <th>Version</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="db-reservations-body">
+                                    <!-- Content -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 3. EVENTUAL CONSISTENCY PAGE -->
+            <div id="page-eventual" class="panel-page">
+                <div class="glass-panel">
+                    <div class="loading-overlay" id="loading-eventual">
+                        <div class="spinner"></div>
+                        <div class="loading-text">Running Eventual Consistency lag checks...</div>
+                    </div>
+                    <div class="panel-header">
+                        <div class="panel-title">
+                            <i class="fa-solid fa-clock-rotate-left"></i>
+                            <h3>Experiment 1: Eventual Consistency (Replication Lag)</h3>
+                        </div>
+                        <button class="btn btn-primary" onclick="runExperiment('eventual')">
+                            <i class="fa-solid fa-circle-play"></i> Run Experiment
+                        </button>
+                    </div>
+                    
+                    <p style="color: var(--text-secondary); line-height: 1.6;">
+                        This experiment writes a batch of new movie records to the **Leader VM** and queries the **Follower VM** at high frequency (1ms polls) to measure how long it takes for the transaction to propagate.
+                    </p>
+
+                    <div class="exp-showcase">
+                        <div>
+                            <div class="table-container">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Run</th>
+                                            <th>Rec ID</th>
+                                            <th>Movie Title</th>
+                                            <th>Write Time (Leader)</th>
+                                            <th>Propagated Time (Follower)</th>
+                                            <th>Polls</th>
+                                            <th>Measured Lag</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="eventual-results-body">
+                                        <tr><td colspan="7" style="text-align: center; color: var(--text-secondary);">Click 'Run Experiment' to view metrics.</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                        <div class="chart-box" id="eventual-chart-box">
+                            <div class="chart-placeholder">
+                                <i class="fa-solid fa-chart-simple"></i>
+                                <p>Chart will render after experiment completion.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 4. MONOTONIC READS PAGE -->
+            <div id="page-monotonic" class="panel-page">
+                <div class="glass-panel">
+                    <div class="loading-overlay" id="loading-monotonic">
+                        <div class="spinner"></div>
+                        <div class="loading-text">Running Monotonic Reads comparison test...</div>
+                    </div>
+                    <div class="panel-header">
+                        <div class="panel-title">
+                            <i class="fa-solid fa-arrow-trend-up"></i>
+                            <h3>Experiment 2: Monotonic Reads Consistency</h3>
+                        </div>
+                        <button class="btn btn-primary" onclick="runExperiment('monotonic')">
+                            <i class="fa-solid fa-circle-play"></i> Run Experiment
+                        </button>
+                    </div>
+                    
+                    <p style="color: var(--text-secondary); line-height: 1.6; margin-bottom: 1.5rem;">
+                        This experiment simulates rapid writes updating a single booking's version on the **Leader VM**. 
+                        It tests two client models: **Test A (Single Node Reads)** directly on the Follower which preserves monotonic consistency, and **Test B (Cross Node Reads)** jumping from Leader to lagged Follower, which demonstrates the classic version rollback violation.
+                    </p>
+
+                    <div class="exp-showcase">
+                        <div>
+                            <div class="table-container" style="max-height: 400px; overflow-y: auto;">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Read No</th>
+                                            <th>Time</th>
+                                            <th>Leader Version</th>
+                                            <th>Follower Version</th>
+                                            <th>Monotonic Status</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="monotonic-results-body">
+                                        <tr><td colspan="5" style="text-align: center; color: var(--text-secondary);">Click 'Run Experiment' to trigger updates.</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                        <div class="chart-box" id="monotonic-chart-box">
+                            <div class="chart-placeholder">
+                                <i class="fa-solid fa-chart-line"></i>
+                                <p>Comparison chart will load here.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 5. READ-AFTER-WRITE PAGE -->
+            <div id="page-raw" class="panel-page">
+                <div class="glass-panel">
+                    <div class="loading-overlay" id="loading-raw">
+                        <div class="spinner"></div>
+                        <div class="loading-text">Simulating Client booking actions and measuring visibility...</div>
+                    </div>
+                    <div class="panel-header">
+                        <div class="panel-title">
+                            <i class="fa-solid fa-book-open"></i>
+                            <h3>Experiment 3: Read-After-Write (RAW) Consistency</h3>
+                        </div>
+                        <button class="btn btn-primary" onclick="runExperiment('raw')">
+                            <i class="fa-solid fa-circle-play"></i> Run Experiment
+                        </button>
+                    </div>
+                    
+                    <p style="color: var(--text-secondary); line-height: 1.6;">
+                        Simulates a client booking a seat. It verifies whether the client can immediately see their reservation when querying the **Leader** (guaranteed RAW consistency) versus the **Follower** (where replication lag may result in temporary invisibility, violating RAW).
+                    </p>
+
+                    <div class="exp-showcase">
+                        <div>
+                            <div class="table-container">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Run</th>
+                                            <th>Res ID</th>
+                                            <th>Showtime ID</th>
+                                            <th>Customer Name</th>
+                                            <th>Leader Read</th>
+                                            <th>Follower Immediate Read</th>
+                                            <th>Follower Visibility Lag</th>
+                                            <th>Result</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="raw-results-body">
+                                        <tr><td colspan="8" style="text-align: center; color: var(--text-secondary);">Trigger the experiment to observe RAW consistency.</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                        <div class="chart-box" id="raw-chart-box">
+                            <div class="chart-placeholder">
+                                <i class="fa-solid fa-chart-column"></i>
+                                <p>RAW logarithmic visibility lag chart.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 6. CONCURRENT WRITES PAGE -->
+            <div id="page-concurrent" class="panel-page">
+                <div class="glass-panel">
+                    <div class="loading-overlay" id="loading-concurrent">
+                        <div class="spinner"></div>
+                        <div class="loading-text">Spawning concurrent booking threads and analyzing race conditions...</div>
+                    </div>
+                    <div class="panel-header">
+                        <div class="panel-title">
+                            <i class="fa-solid fa-arrows-split-up-and-left"></i>
+                            <h3>Experiment 4: Concurrent Writes & Race Condition</h3>
+                        </div>
+                        <button class="btn btn-primary" onclick="runExperiment('concurrent')">
+                            <i class="fa-solid fa-circle-play"></i> Run Experiment
+                        </button>
+                    </div>
+                    
+                    <div style="display: flex; flex-direction: column; gap: 2rem;">
+                        
+                        <!-- Part A -->
+                        <div>
+                            <h4>Part A: Global Ordering Verification (20 Parallel Threads)</h4>
+                            <p style="color: var(--text-secondary); font-size: 0.9rem; margin-top: 5px; margin-bottom: 10px;">
+                                Fires 20 reservation queries concurrently. This demonstrates that because PostgreSQL replication uses a single sequence log, the commit order on the Leader is strictly preserved on the Follower replica (Zero out-of-order replication).
+                            </p>
+                            <div class="table-container" style="max-height: 250px; overflow-y: auto;">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Sequence</th>
+                                            <th>Write ID</th>
+                                            <th>Customer Name</th>
+                                            <th>Leader Commit Time</th>
+                                            <th>Follower Replicated Time</th>
+                                            <th>Status</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="concurrent-order-body">
+                                        <tr><td colspan="6" style="text-align: center; color: var(--text-secondary);">Run the experiment to see multi-threaded ordering.</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                        
+                        <!-- Part B -->
+                        <div>
+                            <h4>Part B: Race Condition & Double Booking Demonstration</h4>
+                            <p style="color: var(--text-secondary); font-size: 0.9rem; margin-top: 5px; margin-bottom: 15px;">
+                                Fires 2 threads trying to book the exact same seat (Showtime 1, Seat 10) at the exact same millisecond. Demonstrates how application-level checks without locking result in **Double Booking** (Race Condition).
+                            </p>
+                            
+                            <div class="racer-results" id="racer-cards-container">
+                                <!-- Racer cards -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </main>
+    </div>
+
+    <!-- JS Programming Logic -->
+    <script>
+        // Pages Navigation
+        const menuItems = document.querySelectorAll('.menu-item');
+        const pages = document.querySelectorAll('.panel-page');
+        const pageTitle = document.getElementById('header-page-title');
+        const pageDesc = document.getElementById('header-page-desc');
+
+        const pageHeaders = {
+            'page-dashboard': { title: 'Replication Overview', desc: 'Real-time stats and single-leader streaming replication controller.' },
+            'page-database': { title: 'Database Viewer', desc: 'Live browser for tables and logs residing in the PostgreSQL databases.' },
+            'page-eventual': { title: 'Eventual Consistency Test', desc: 'Measures replication lag from Leader VM to Follower VM.' },
+            'page-monotonic': { title: 'Monotonic Reads Analysis', desc: 'Investigates rollback violations across multi-node read transactions.' },
+            'page-raw': { title: 'Read-After-Write Consistency', desc: 'Verifies if clients instantly see their own database insertions.' },
+            'page-concurrent': { title: 'Concurrent Writes & Race Condition', desc: 'Demonstrates FIFO global order preservation and double booking race conditions.' }
+        };
+
+        menuItems.forEach(item => {
+            item.addEventListener('click', () => {
+                // Set active item
+                menuItems.forEach(i => i.classList.remove('active'));
+                item.classList.add('active');
+
+                // Switch page
+                const target = item.getAttribute('data-target');
+                pages.forEach(p => p.classList.remove('active'));
+                document.getElementById(target).classList.add('active');
+
+                // Update headers
+                pageTitle.textContent = pageHeaders[target].title;
+                pageDesc.textContent = pageHeaders[target].desc;
+                
+                // Refresh data if going to certain pages
+                if (target === 'page-dashboard') {
+                    fetchLogs();
+                    fetchDbState();
+                } else if (target === 'page-database') {
+                    fetchDbState();
+                }
+            });
+        });
+
+        // Fetch DB State & Update Tables
+        function fetchDbState() {
+            fetch('/api/db-state')
+                .then(res => res.json())
+                .then(response => {
+                    if (response.status === 'success') {
+                        const data = response.data;
+                        
+                        // Update Stat Badges
+                        document.getElementById('stat-res-count').textContent = data.reservations.length;
+                        document.getElementById('stat-log-count').textContent = data.replication_logs.length;
+                        
+                        // Render Quick Logs in Dashboard
+                        const quickLogs = document.getElementById('quick-db-log-body');
+                        quickLogs.innerHTML = '';
+                        data.replication_logs.forEach(log => {
+                            const badgeClass = log.op_type === 'INSERT' ? 'badge-insert' : log.op_type === 'UPDATE' ? 'badge-update' : 'badge-delete';
+                            const dateShort = log.timestamp.split('.')[0];
+                            quickLogs.innerHTML += `
+                                <tr>
+                                    <td>#${log.log_id}</td>
+                                    <td><span class="badge ${badgeClass}">${log.op_type}</span></td>
+                                    <td>${log.table}</td>
+                                    <td class="op-mono">${log.record_id}</td>
+                                    <td>${log.node}</td>
+                                    <td style="font-size: 0.8rem;">${dateShort}</td>
+                                </tr>
+                            `;
+                        });
+                        
+                        // Render Database Viewer tables
+                        // Movies
+                        const moviesBody = document.getElementById('db-movies-body');
+                        moviesBody.innerHTML = '';
+                        data.movies.forEach(m => {
+                            moviesBody.innerHTML += `
+                                <tr>
+                                    <td>${m.id}</td>
+                                    <td><strong>${m.title}</strong></td>
+                                    <td>${m.genre}</td>
+                                    <td>${m.duration} mins</td>
+                                    <td><span class="badge badge-success">v${m.version}</span></td>
+                                </tr>
+                            `;
+                        });
+                        
+                        // Showtimes
+                        const showtimesBody = document.getElementById('db-showtimes-body');
+                        showtimesBody.innerHTML = '';
+                        data.showtimes.forEach(s => {
+                            showtimesBody.innerHTML += `
+                                <tr>
+                                    <td>${s.id}</td>
+                                    <td><strong>${s.movie}</strong></td>
+                                    <td>${s.hall}</td>
+                                    <td style="font-size: 0.85rem; font-family: var(--font-mono);">${s.date} ${s.time}</td>
+                                </tr>
+                            `;
+                        });
+                        
+                        // Reservations
+                        const resBody = document.getElementById('db-reservations-body');
+                        resBody.innerHTML = '';
+                        data.reservations.forEach(r => {
+                            const statusBadge = r.status === 'reserved' ? 'badge-success' : 'badge-warning';
+                            resBody.innerHTML += `
+                                <tr>
+                                    <td>${r.id}</td>
+                                    <td><strong>${r.movie}</strong></td>
+                                    <td>${r.hall}</td>
+                                    <td class="op-mono">${r.seat}</td>
+                                    <td>${r.customer}</td>
+                                    <td><span class="badge ${statusBadge}">${r.status}</span></td>
+                                    <td>v${r.version}</td>
+                                </tr>
+                            `;
+                        });
+                    }
+                })
+                .catch(err => console.error("Error fetching database state: ", err));
+        }
+
+        // Fetch logs tail
+        function fetchLogs() {
+            fetch('/api/logs')
+                .then(res => res.json())
+                .then(response => {
+                    if (response.status === 'success') {
+                        const terminal = document.getElementById('live-terminal-box');
+                        terminal.innerHTML = '';
+                        response.logs.forEach(log => {
+                            // Color lines based on patterns
+                            let coloredLine = log;
+                            if (log.includes('OP: INSERT')) coloredLine = `<span style="color: #34D399;">${log}</span>`;
+                            else if (log.includes('OP: UPDATE')) coloredLine = `<span style="color: #60A5FA;">${log}</span>`;
+                            else if (log.includes('OP: DELETE')) coloredLine = `<span style="color: #F87171;">${log}</span>`;
+                            
+                            terminal.innerHTML += `<div>${coloredLine}</div>`;
+                        });
+                        // Scroll to bottom
+                        terminal.scrollTop = terminal.scrollHeight;
+                    }
+                })
+                .catch(err => console.error("Error fetching crud.log: ", err));
+        }
+
+        // Run Experiments
+        function runExperiment(name) {
+            const overlay = document.getElementById(`loading-${name}`);
+            overlay.classList.add('active');
+            
+            fetch(`/api/run-experiment/${name}`, { method: 'POST' })
+                .then(res => res.json())
+                .then(response => {
+                    overlay.classList.remove('active');
+                    if (response.status === 'success') {
+                        const data = response.data;
+                        
+                        if (name === 'eventual') {
+                            renderEventualResults(data);
+                        } else if (name === 'monotonic') {
+                            renderMonotonicResults(data);
+                        } else if (name === 'raw') {
+                            renderRawResults(data);
+                        } else if (name === 'concurrent') {
+                            renderConcurrentResults(data);
+                        }
+                        
+                        // Refresh live terminal logs and metrics
+                        fetchLogs();
+                        fetchDbState();
+                    } else {
+                        alert("Experiment error: " + response.message);
+                    }
+                })
+                .catch(err => {
+                    overlay.classList.remove('active');
+                    alert("Execution failed: " + err);
+                });
+        }
+
+        // Render functions for individual experiments
+        function renderEventualResults(res) {
+            const tbody = document.getElementById('eventual-results-body');
+            tbody.innerHTML = '';
+            
+            res.details.forEach(item => {
+                const wTime = item.write_time.split('T')[1].substring(0, 12);
+                const vTime = item.visible_time.split('T')[1].substring(0, 12);
+                tbody.innerHTML += `
+                    <tr>
+                        <td>${item.run}</td>
+                        <td>${item.record_id}</td>
+                        <td><strong>${item.title.split('_')[2]}</strong></td>
+                        <td class="op-mono">${wTime}</td>
+                        <td class="op-mono">${vTime}</td>
+                        <td>${item.attempts}</td>
+                        <td class="op-mono" style="color: var(--accent-orange); font-weight: bold;">${item.lag_ms} ms</td>
+                    </tr>
+                `;
+            });
+            
+            // Set Average lag metric in general dashboard
+            document.getElementById('stat-avg-lag').textContent = `${res.summary.avg_lag_ms} ms`;
+            
+            // Render Visual chart
+            const chartBox = document.getElementById('eventual-chart-box');
+            // Cache bust image to avoid browser displaying old graph
+            chartBox.innerHTML = `<img src="/results/eventual_lag_plot.png?t=${new Date().getTime()}" alt="Eventual Lag Plot">`;
+        }
+
+        function renderMonotonicResults(res) {
+            const tbody = document.getElementById('monotonic-results-body');
+            tbody.innerHTML = '';
+            
+            // We interlace the cross node details
+            res.details_cross.slice(0, 20).forEach(item => {
+                const isViolation = item.status.includes('VIOLATION');
+                const badge = isViolation ? '<span class="badge badge-delete">VIOLATION</span>' : '<span class="badge badge-insert">OK</span>';
+                
+                tbody.innerHTML += `
+                    <tr>
+                        <td>${item.read_no}</td>
+                        <td class="op-mono">${item.time}</td>
+                        <td>v${item.leader_version}</td>
+                        <td style="${isViolation ? 'color: var(--accent-red); font-weight:bold;' : ''}">v${item.follower_version}</td>
+                        <td>${badge}</td>
+                    </tr>
+                `;
+            });
+            
+            // Update statistic
+            const total = res.details_cross.length;
+            const violations = res.summary.cross_node_violations;
+            const rate = ((violations / total) * 100).toFixed(1);
+            document.getElementById('stat-violations').textContent = `${rate}%`;
+            
+            // Render Visual Chart
+            const chartBox = document.getElementById('monotonic-chart-box');
+            chartBox.innerHTML = `<img src="/results/monotonic_reads_plot.png?t=${new Date().getTime()}" alt="Monotonic Reads Plot">`;
+        }
+
+        function renderRawResults(res) {
+            const tbody = document.getElementById('raw-results-body');
+            tbody.innerHTML = '';
+            
+            res.details.forEach(item => {
+                const isViolation = item.status.includes('VIOLATION');
+                const statusBadge = isViolation ? '<span class="badge badge-delete">VIOLATION</span>' : '<span class="badge badge-success">RAW SECURED</span>';
+                const stId = item.showtime_id || 1;
+                
+                tbody.innerHTML += `
+                    <tr>
+                        <td>${item.run}</td>
+                        <td>${item.reservation_id}</td>
+                        <td><span class="badge badge-warning">Showtime ${stId}</span></td>
+                        <td><strong>${item.customer_name.split('_')[2]}</strong></td>
+                        <td style="color: var(--accent-neon);">${item.leader_lag_ms.toFixed(2)} ms</td>
+                        <td>${item.follower_immediate_visible}</td>
+                        <td class="op-mono" style="color: var(--accent-orange); font-weight: bold;">${item.follower_lag_ms.toFixed(1)} ms</td>
+                        <td>${statusBadge}</td>
+                    </tr>
+                `;
+            });
+            
+            // Render Visual Chart
+            const chartBox = document.getElementById('raw-chart-box');
+            chartBox.innerHTML = `<img src="/results/read_after_write_plot.png?t=${new Date().getTime()}" alt="RAW Plot">`;
+        }
+
+        function renderConcurrentResults(res) {
+            // Part A - Order preservation
+            const tbody = document.getElementById('concurrent-order-body');
+            tbody.innerHTML = '';
+            
+            if (res.details_ordering && res.details_ordering.length > 0) {
+                res.details_ordering.forEach(item => {
+                    tbody.innerHTML += `
+                        <tr>
+                            <td>#${item.sequence}</td>
+                            <td>${item.write_id}</td>
+                            <td>${item.customer}</td>
+                            <td class="op-mono">${item.leader_time}</td>
+                            <td class="op-mono">${item.follower_time}</td>
+                            <td><span class="badge badge-success">${item.status}</span></td>
+                        </tr>
+                    `;
+                });
+            } else {
+                tbody.innerHTML = `<tr><td colspan="6" style="text-align: center; color: var(--text-secondary);">No concurrent ordering data available.</td></tr>`;
+            }
+            
+            // Part B - Race condition double booking
+            const racerBox = document.getElementById('racer-cards-container');
+            racerBox.innerHTML = '';
+            
+            res.race_condition_summary.racers.forEach(r => {
+                const success = r.status.includes('SUCCESS');
+                const cardClass = success ? 'success' : 'failed';
+                const icon = success ? 'fa-circle-check' : 'fa-circle-xmark';
+                
+                racerBox.innerHTML += `
+                    <div class="racer-card ${cardClass}">
+                        <div class="racer-header">
+                            <span>Racer #${r.racer_id}</span>
+                            <i class="fa-solid ${icon}" style="font-size: 1.25rem;"></i>
+                        </div>
+                        <p style="font-size: 0.9rem; margin-bottom: 5px;"><strong>Customer:</strong> ${r.customer}</p>
+                        <p style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 5px;"><strong>Trigger Time:</strong> ${r.time}</p>
+                        <p style="font-size: 0.95rem; font-weight:bold;"><strong>Outcome:</strong> ${r.status}</p>
+                        ${r.res_id ? `<p style="font-size: 0.8rem; color: var(--accent-purple); margin-top:5px;"><strong>Assigned ResID:</strong> ${r.res_id}</p>` : ''}
+                    </div>
+                `;
+            });
+        }
+
+        // Initialize state on load
+        window.onload = function() {
+            fetchLogs();
+            fetchDbState();
+            
+            // Keep logs updated every 3 seconds
+            setInterval(fetchLogs, 3000);
+            
+            // Keep DB viewer updated every 5 seconds
+            setInterval(fetchDbState, 5000);
+        };
+    </script>
+</body>
+</html>
