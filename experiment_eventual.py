@@ -22,6 +22,15 @@ def run_eventual_consistency_experiment(iterations=10):
 
     results = []
     
+    headers = ["Iteration", "Record ID", "Movie Title", "Write Time (L)", "Visible Time (F)", "Query Count", "Lag (ms)"]
+    col_widths = [9, 9, 26, 26, 26, 11, 8]
+    row_format = " | ".join([f"{{:<{w}}}" for w in col_widths])
+    border = "-+-".join(["-" * w for w in col_widths])
+    
+    print("\n" + border)
+    print(row_format.format(*headers))
+    print(border)
+    
     for i in range(1, iterations + 1):
         movie_title = f"Exp1_Movie_{int(time.time())}_{i}"
         genre = "Thriller"
@@ -29,7 +38,6 @@ def run_eventual_consistency_experiment(iterations=10):
         operation_id = str(uuid.uuid4())
         
         log_info(f"[{i}/{iterations}] Writing movie: '{movie_title}' to Leader...", node="Exp1")
-        print(f"\n[{i}/{iterations}] Adding movie: '{movie_title}'...")
         
         # 1. Write to Leader DB (INSERT)
         conn_l = psycopg2.connect(**LEADER_DB)
@@ -85,18 +93,24 @@ def run_eventual_consistency_experiment(iterations=10):
             # Replication lag: The difference between the time data is visible in the Follower and the time it was written to the Leader
             lag_ms = (t_visible - t_write_start).total_seconds() * 1000.0
             log_info(f"[{i}/{iterations}] Replicated to Follower! (Attempts: {attempts}, Lag: {lag_ms:.2f}ms)", node="Exp1")
-            print(f"   -> Success! Data appeared in the Follower after {attempts} attempts.")
-            print(f"   -> Leader Write Time: {t_write_start.strftime('%H:%M:%S.%f')[:-3]}")
-            print(f"   -> Follower Appearance Time: {t_visible.strftime('%H:%M:%S.%f')[:-3]}")
-            print(f"   -> Replication Lag: {lag_ms:.2f} ms")
-            
             results.append([i, record_id, movie_title, t_write_start, t_visible, attempts, round(lag_ms, 2)])
+            
+            lag_ms_str = f"{lag_ms:.2f}"
+            visible_time_str = t_visible.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
         else:
             log_info(f"[{i}/{iterations}] ERROR: Replication timeout on Follower after 15s!", node="Exp1")
-            print("   ERROR: ERROR: Data did not reach the Follower within 15 seconds!")
             results.append([i, record_id, movie_title, t_write_start, "TIMEOUT", attempts, -1])
             
+            lag_ms_str = "-1.00"
+            visible_time_str = "TIMEOUT"
+            
+        write_time_str = t_write_start.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+        row = [str(i), str(record_id), movie_title, write_time_str, visible_time_str, str(attempts), lag_ms_str]
+        print(row_format.format(*row))
+            
         time.sleep(0.5)  # Short wait between iterations
+
+    print(border)
 
     # 4. Evaluating & Reporting Results
     valid_lags = [r[6] for r in results if r[6] > 0]
@@ -109,8 +123,6 @@ def run_eventual_consistency_experiment(iterations=10):
         min_lag = max_lag = avg_lag = 0
         
     log_info(f"SUMMARY: Avg Lag = {avg_lag:.2f}ms (Min: {min_lag:.2f}ms, Max: {max_lag:.2f}ms)", node="Exp1")
-    headers = ["Iteration", "Record ID", "Movie Title", "Write Time (L)", "Visible Time (F)", "Query Count", "Lag (ms)"]
-    print_table(headers, results)
     
     print("=" * 60)
     print("SUMMARY STATISTICS:")

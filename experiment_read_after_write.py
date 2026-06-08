@@ -1,6 +1,7 @@
 import psycopg2
 import uuid
 import time
+import threading
 from datetime import datetime
 from db_config import LEADER_DB, FOLLOWER_DB
 from logger import log_operation, log_info
@@ -39,18 +40,37 @@ def run_read_after_write_experiment(iterations=10):
     
     results = []
 
+    # CSV headers
+    headers = ["Iteration", "Reservation ID", "Customer Name", "Leader Visibility (ms)", "Follower Immediate Visibility", "Follower Visibility (ms)", "Query Count", "Status"]
+
+    # Print table header
+    print_headers = ["Iteration", "Seat", "Customer Name", "Commit Time (L)", "Visible Time (F)", "Leader Vis (ms)", "Follower Lag (ms)", "Query Count", "Status"]
+    col_widths = [9, 6, 26, 15, 16, 15, 17, 11, 36]
+    row_format = " | ".join([f"{{:<{w}}}" for w in col_widths])
+    border = "-+-".join(["-" * w for w in col_widths])
+    
+    print("\n" + border)
+    print(row_format.format(*print_headers))
+    print(border)
+
     # Establish persistent connections to eliminate connection setup overhead
-    conn_l = psycopg2.connect(**LEADER_DB)
-    cur_l = conn_l.cursor()
-    conn_f = psycopg2.connect(**FOLLOWER_DB)
-    cur_f = conn_f.cursor()
+    # Connection for Leader write operations
+    conn_l_write = psycopg2.connect(**LEADER_DB)
+    cur_l_write = conn_l_write.cursor()
+    
+    # Connection for Leader read check (Thread 1)
+    conn_l_check = psycopg2.connect(**LEADER_DB)
+    cur_l_check = conn_l_check.cursor()
+    
+    # Connection for Follower read check (Thread 2)
+    conn_f_check = psycopg2.connect(**FOLLOWER_DB)
+    cur_f_check = conn_f_check.cursor()
 
     for i in range(1, iterations + 1):
         seat_id = 2 + i  # Seats: 3, 4, 5, ..., 12
         customer_name = f"RAW_Customer_{int(time.time())}_{i}"
         
         log_info(f"[{i}/{iterations}] Creating reservation on Leader: Customer={customer_name}, SeatID={seat_id}...", node="Exp3")
-        print(f"\n[{i}/{iterations}] Creating reservation: Customer={customer_name}, SeatID={seat_id}...")
         
         # A. WRITING TO LEADER
         t_write = datetime.now()
@@ -60,46 +80,88 @@ def run_read_after_write_experiment(iterations=10):
             VALUES (%s, %s, %s, 'reserved', 1, %s, %s) RETURNING id;
         """
         op_id = str(uuid.uuid4())
-        cur_l.execute(query_insert, (showtime_id, seat_id, customer_name, t_write, op_id))
-        res_id = cur_l.fetchone()[0]
-        conn_l.commit()
+        cur_l_write.execute(query_insert, (showtime_id, seat_id, customer_name, t_write, op_id))
+        res_id = cur_l_write.fetchone()[0]
+        conn_l_write.commit()
         t_commit = datetime.now()
+        
         # Resolve seat label dynamically
-        cur_l.execute("SELECT row_label || seat_number FROM seats WHERE id = %s;", (seat_id,))
-        seat_label = cur_l.fetchone()[0]
+        cur_l_write.execute("SELECT row_label || seat_number FROM seats WHERE id = %s;", (seat_id,))
+        seat_label = cur_l_write.fetchone()[0]
         
-        # B. IMMEDIATE READ ON FOLLOWER (First check, right after commit to capture lag)
-        t_read_follower_first = datetime.now()
-        cur_f.execute("SELECT customer_name FROM reservations WHERE id = %s;", (res_id,))
-        row_f_first = cur_f.fetchone()
+        # Shared thread outputs
+        leader_res = {}
+        follower_res = {}
         
-        first_read_visible = (row_f_first is not None)
-        
-        # If not found in the first read, poll in a tight loop until it appears
-        t_poll_start = time.time()
-        follower_visible_time = None
-        attempts = 1
-        
-        if first_read_visible:
-            follower_visible_time = t_read_follower_first
-        else:
-            while time.time() - t_poll_start < 10:  # 10 seconds limit
-                attempts += 1
-                cur_f.execute("SELECT customer_name FROM reservations WHERE id = %s;", (res_id,))
-                row_f = cur_f.fetchone()
-                if row_f:
-                    follower_visible_time = datetime.now()
-                    break
-                time.sleep(0.0005)  # Very high frequency polling with 0.5ms wait
+        # Thread 1: Leader Visibility Check
+        def check_leader_visibility():
+            try:
+                cur_l_check.execute("SELECT customer_name FROM reservations WHERE id = %s;", (res_id,))
+                row_l = cur_l_check.fetchone()
+                t_end = datetime.now()
+                leader_res['visible'] = (row_l is not None)
+                leader_res['lag_ms'] = (t_end - t_commit).total_seconds() * 1000.0
+            except Exception as e:
+                leader_res['visible'] = False
+                leader_res['lag_ms'] = -1.0
+                leader_res['error'] = str(e)
                 
-        # C. READ ON LEADER (Done after Follower check, to demonstrate Leader is always instant)
-        t_read_leader_start = datetime.now()
-        cur_l.execute("SELECT customer_name FROM reservations WHERE id = %s;", (res_id,))
-        row_l = cur_l.fetchone()
-        t_read_leader_end = datetime.now()
+        # Thread 2: Follower Visibility Check and Polling
+        def check_follower_visibility():
+            try:
+                # First immediate read check
+                t_read_first = datetime.now()
+                cur_f_check.execute("SELECT customer_name FROM reservations WHERE id = %s;", (res_id,))
+                row_f_first = cur_f_check.fetchone()
+                
+                first_visible = (row_f_first is not None)
+                attempts = 1
+                t_poll_start = time.time()
+                visible_time = None
+                
+                if first_visible:
+                    visible_time = t_read_first
+                else:
+                    while time.time() - t_poll_start < 10:  # 10 seconds limit
+                        attempts += 1
+                        cur_f_check.execute("SELECT customer_name FROM reservations WHERE id = %s;", (res_id,))
+                        row_f = cur_f_check.fetchone()
+                        if row_f:
+                            visible_time = datetime.now()
+                            break
+                        time.sleep(0.0005)  # 0.5ms wait
+                        
+                follower_res['first_visible'] = first_visible
+                follower_res['attempts'] = attempts
+                follower_res['visible_time'] = visible_time
+                if visible_time:
+                    follower_res['lag_ms'] = (visible_time - t_commit).total_seconds() * 1000.0
+                else:
+                    follower_res['lag_ms'] = -1.0
+            except Exception as e:
+                follower_res['first_visible'] = False
+                follower_res['attempts'] = 0
+                follower_res['lag_ms'] = -1.0
+                follower_res['error'] = str(e)
+                
+        # Start both checks in parallel threads
+        t1 = threading.Thread(target=check_leader_visibility)
+        t2 = threading.Thread(target=check_follower_visibility)
         
-        leader_visible = (row_l is not None)
-        leader_lag_ms = (t_read_leader_end - t_commit).total_seconds() * 1000.0  # Measured from commit
+        t1.start()
+        t2.start()
+        
+        t1.join()
+        t2.join()
+        
+        # Read thread outputs
+        leader_visible = leader_res.get('visible', False)
+        leader_lag_ms = leader_res.get('lag_ms', -1.0)
+        
+        first_read_visible = follower_res.get('first_visible', False)
+        attempts = follower_res.get('attempts', 0)
+        follower_lag_ms = follower_res.get('lag_ms', -1.0)
+        follower_visible_time = follower_res.get('visible_time', None)
         
         # Log record (moved here so it doesn't add latency to replication check)
         log_operation("INSERT", "reservations", res_id, {
@@ -110,7 +172,6 @@ def run_read_after_write_experiment(iterations=10):
         # D. ANALYSIS AND CALCULATION
         if follower_visible_time:
             # Measure lag from t_commit (when replication actually started)
-            follower_lag_ms = (follower_visible_time - t_commit).total_seconds() * 1000.0
             violation = "VIOLATION (Could not see own write!)" if not first_read_visible else "NORMAL (Saw instantly)"
             
             if not first_read_visible:
@@ -118,14 +179,6 @@ def run_read_after_write_experiment(iterations=10):
             else:
                 log_info(f"[{i}/{iterations}] RAW Secured! Visible on Follower immediately", node="Exp3")
                 
-            follower_first_val = f"VISIBLE (Seat {seat_label} reserved by {customer_name})" if first_read_visible else f"NOT FOUND (Seat {seat_label} is [EMPTY / AVAILABLE])"
-            leader_val = f"VISIBLE (Seat {seat_label} reserved by {customer_name})" if leader_visible else "ERROR (Not Found)"
-            
-            print(f"   -> Follower First Read: {follower_first_val}")
-            print(f"   -> Follower Lag    : {follower_lag_ms:.2f} ms ({attempts} attempts)")
-            print(f"   -> Leader Read  : {leader_val} ({leader_lag_ms:.2f} ms lag after commit)")
-            print(f"   -> Status           : {violation}")
-            
             results.append([
                 i, res_id, customer_name, 
                 leader_lag_ms, 
@@ -134,22 +187,45 @@ def run_read_after_write_experiment(iterations=10):
                 attempts, 
                 violation
             ])
+            
+            row = [
+                str(i), seat_label, customer_name, 
+                t_commit.strftime('%H:%M:%S.%f')[:-3], 
+                follower_visible_time.strftime('%H:%M:%S.%f')[:-3], 
+                f"{leader_lag_ms:.3f}", 
+                f"{follower_lag_ms:.2f}", 
+                str(attempts), 
+                violation
+            ]
+            print(row_format.format(*row))
         else:
             log_info(f"[{i}/{iterations}] ERROR: Record did not replicate on Follower within 10 seconds timeout!", node="Exp3")
-            print("   ERROR: ERROR: Record did not appear on Follower within 10 seconds!")
             results.append([i, res_id, customer_name, leader_lag_ms, "No", -1, attempts, "TIMEOUT"])
+            
+            row = [
+                str(i), seat_label, customer_name, 
+                t_commit.strftime('%H:%M:%S.%f')[:-3], 
+                "TIMEOUT", 
+                f"{leader_lag_ms:.3f}", 
+                "-1.00", 
+                str(attempts), 
+                "TIMEOUT"
+            ]
+            print(row_format.format(*row))
             
         time.sleep(0.5)
 
     # Close persistent connections
-    cur_l.close()
-    conn_l.close()
-    cur_f.close()
-    conn_f.close()
+    cur_l_write.close()
+    conn_l_write.close()
+    cur_l_check.close()
+    conn_l_check.close()
+    cur_f_check.close()
+    conn_f_check.close()
+
+    print(border)
 
     # 4. Result Report and Statistics
-    headers = ["Iteration", "Reservation ID", "Customer Name", "Leader Visibility (ms)", "Follower Immediate Visibility", "Follower Visibility (ms)", "Query Count", "Status"]
-    print_table(headers, results)
     
     total_runs = len(results)
     violations_count = sum(1 for r in results if "VIOLATION" in r[7])

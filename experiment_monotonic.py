@@ -43,7 +43,7 @@ def run_monotonic_reads_experiment(interactive=False):
     print(f"Preparation complete. Reservation ID: {res_id} (Seat B1) created.")
     
     if interactive:
-        input(f"\nReservation ID {res_id} is created. Please start the 'Live Monotonic Reads Checker' (Option 6) on the Follower VM, enter ID {res_id}, and then press ENTER here to start updates...")
+        input(f"\nReservation ID {res_id} is created. Please start the 'Live Monotonic Reads Checker' (Option 2) on the Follower VM, enter ID {res_id}, and then press ENTER here to start updates...")
         
     print("Starting 30 rapid updates on the Leader. Concurrent reads will be performed on the Follower...")
     log_info(f"Writer thread initialized. Starting rapid updates on reservation ID: {res_id}...", node="Exp2")

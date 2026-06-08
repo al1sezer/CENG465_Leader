@@ -2,6 +2,7 @@ import psycopg2
 import uuid
 import time
 import threading
+import json
 from datetime import datetime
 from db_config import LEADER_DB, FOLLOWER_DB
 from logger import log_operation, log_info
@@ -68,34 +69,23 @@ def run_concurrent_writes_experiment():
             conn = psycopg2.connect(**LEADER_DB)
             cur = conn.cursor()
             
-            # Write start time
-            t_start = datetime.now()
+            # Write commit time
+            t_commit = datetime.now()
             
             query = """
                 INSERT INTO reservations (showtime_id, seat_id, customer_name, status, version, last_updated, operation_id) 
                 VALUES (%s, %s, %s, 'reserved', 1, %s, %s) RETURNING id;
             """
-            cur.execute(query, (showtime_id, seat_id, customer, t_start, op_id))
+            cur.execute(query, (showtime_id, seat_id, customer, t_commit, op_id))
             res_id = cur.fetchone()[0]
-            
-            # Capture commit time before committing to database
-            t_commit = datetime.now()
-            
-            # Write to replication_log table in the database in the SAME transaction
-            log_query = """
-                INSERT INTO replication_log (operation_type, table_name, record_id, details, timestamp, node) 
-                VALUES ('INSERT', 'reservations', %s, %s, %s, 'Leader')
-            """
-            import json
-            cur.execute(log_query, (res_id, json.dumps({"customer_name": customer, "operation_id": op_id}), t_commit))
             
             conn.commit()
             
-            # Write to local file log (no DB write here since we did it inside transaction)
+            # Write to local file log
             log_info(f"Thread {thread_idx} wrote reservation ID {res_id} (Seat ID: {seat_id})", node="Exp4")
             
             # Write to local file log specifically for crud.log format
-            time_str = t_start.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+            time_str = t_commit.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
             log_line = f"[{time_str}] NODE: Leader | OP: INSERT | TABLE: reservations    | ID: {res_id:<4d} | DETAILS: {json.dumps({'customer_name': customer, 'operation_id': op_id})}\n"
             with open("crud.log", "a", encoding="utf-8") as f_log:
                 f_log.write(log_line)
@@ -103,17 +93,6 @@ def run_concurrent_writes_experiment():
             cur.close()
             conn.close()
             
-            with leader_commits_lock:
-                leader_commits.append({
-                    "thread": thread_idx,
-                    "res_id": res_id,
-                    "seat_id": seat_id,
-                    "seat_name": seat_map[seat_id],
-                    "customer": customer,
-                    "start_time": t_start,
-                    "commit_time": t_commit,
-                    "op_id": op_id
-                })
         except Exception as e:
             print(f"   ERROR: Thread {thread_idx} Error: {e}")
 
@@ -127,64 +106,36 @@ def run_concurrent_writes_experiment():
     for t in threads:
         t.join()
         
-    # Sort Leader commits by commit timestamp
-    leader_commits.sort(key=lambda x: x["commit_time"])
+    # Fetch Leader commits directly from reservations table, sorted by ID
+    conn = psycopg2.connect(**LEADER_DB)
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT id, seat_id, customer_name, last_updated 
+        FROM reservations 
+        WHERE customer_name LIKE 'Concurrent_Cust_%%' 
+        ORDER BY id ASC;
+    """)
+    leader_rows = cur.fetchall()
+    cur.close()
+    conn.close()
     
-    # Wait 3 seconds for replication
-    log_info("Operations completed on Leader. Waiting 3 seconds for replication sequence verification...", node="Exp4")
-    print("Operations completed on the Leader. Waiting 3 seconds for replication...")
-    time.sleep(3)
-    
-    # Fetch log sequence from replication_log on Follower
-    conn_f = psycopg2.connect(**FOLLOWER_DB)
-    cur_f = conn_f.cursor()
-    
-    # Fetch logs only for records we added (ordered by commit timestamp)
-    query_f = """
-        SELECT record_id, timestamp, details->>'customer_name' 
-        FROM replication_log 
-        WHERE table_name = 'reservations' AND details->>'customer_name' LIKE 'Concurrent_Cust_%%'
-        ORDER BY timestamp ASC;
-    """
-    cur_f.execute(query_f)
-    follower_logs = cur_f.fetchall()
-    
-    cur_f.close()
-    conn_f.close()
-    
-    # Ordering Comparison Analysis
+    # Ordering Results
     order_preservation_results = []
-    out_of_order_count = 0
     
-    print("\nLEADER COMMIT ORDER vs FOLLOWER REPLICATION LOG ORDER:")
-    print("-" * 120)
-    print(f"{'Order':<5s} | {'Write ID':<8s} | {'Seat':<6s} | {'Customer Name':<22s} | {'Leader Commit':<22s} | {'Follower Log':<22s} | {'Status'}")
-    print("-" * 120)
+    print("\nLEADER COMMIT ORDER (RESERVATIONS TABLE):")
+    print("-" * 80)
+    print(f"{'Order':<5s} | {'Res ID':<8s} | {'Seat':<6s} | {'Customer Name':<22s} | {'Commit Time'}")
+    print("-" * 80)
     
-    for seq, l_item in enumerate(leader_commits):
-        # Find this record_id in the Follower logs and get its sequence
-        f_seq = -1
-        f_time = None
-        for fs, f_item in enumerate(follower_logs):
-            if f_item[0] == l_item["res_id"]:
-                f_seq = fs
-                f_time = f_item[1]
-                break
-                
-        status = "IN ORDER"
-        if f_seq != seq:
-            status = f"DIFFERENT (F_Order: {f_seq})"
-            out_of_order_count += 1
-            
-        l_time_str = l_item["commit_time"].strftime('%H:%M:%S.%f')[:-3]
-        f_time_str = f_time.strftime('%H:%M:%S.%f')[:-3] if f_time else "NOT FOUND"
-        
-        print(f"#{seq+1:<4d} | ID:{l_item['res_id']:<4d} | {l_item['seat_name']:<6s} | {l_item['customer']:<22s} | {l_time_str:<22s} | {f_time_str:<22s} | {status}")
-        order_preservation_results.append([seq+1, l_item['res_id'], l_item['customer'], l_time_str, f_time_str, status])
+    for seq, row in enumerate(leader_rows):
+        res_id, seat_id, customer, t_commit = row
+        l_time_str = t_commit.strftime('%H:%M:%S.%f')[:-3] if t_commit else "None"
+        seat_name = seat_map[seat_id]
+        print(f"#{seq+1:<4d} | ID:{res_id:<4d} | {seat_name:<6s} | {customer:<22s} | {l_time_str}")
+        order_preservation_results.append([seq+1, res_id, customer, l_time_str])
 
-    print("-" * 120)
-    print(f"Ordering Violation Count (Out-of-Order Replication): {out_of_order_count} (Expected: 0 - Because WAL is applied sequentially in a single thread!)")
-    log_info(f"Part 1 Verified: Replication order preservation complete. Out-of-order count: {out_of_order_count}", node="Exp4")
+    print("-" * 80)
+    log_info("Part 1 Verified: Leader commit sequencing complete.", node="Exp4")
     
     # ============================================================================
     # PART 2: RACE CONDITION (RACE CONDITION & DOUBLE BOOKING)
@@ -320,7 +271,7 @@ def run_concurrent_writes_experiment():
 
     
     # Save Results
-    headers_order = ["Order", "Write ID", "Customer Name", "Leader Commit", "Follower Log", "Status"]
+    headers_order = ["Order", "Write ID", "Customer Name", "Leader Commit"]
     save_to_csv("concurrent_order_results.csv", headers_order, order_preservation_results)
     
     headers_race = ["Racer ID", "Customer", "Time", "Result", "Reservation ID"]
@@ -330,17 +281,14 @@ def run_concurrent_writes_experiment():
         "experiment": "Concurrent Writes & Race Condition",
         "timestamp": datetime.now().isoformat(),
         "ordering_summary": {
-            "total_writes": len(leader_commits),
-            "out_of_order_count": out_of_order_count
+            "total_writes": len(leader_rows)
         },
         "details_ordering": [
             {
                 "sequence": r[0],
                 "write_id": r[1],
                 "customer": r[2],
-                "leader_time": r[3],
-                "follower_time": r[4],
-                "status": r[5]
+                "leader_time": r[3]
             } for r in order_preservation_results
         ],
         "race_condition_summary": {

@@ -25,7 +25,6 @@ def save_to_csv(filename, headers, rows):
             writer = csv.writer(f)
             writer.writerow(headers)
             writer.writerows(rows)
-        print(f"Data successfully saved to: {filepath}")
         return filepath
     except Exception as e:
         print(f"ERROR: CSV saving error: {e}")
@@ -40,7 +39,6 @@ def save_to_json(filename, data):
     try:
         with open(filepath, mode="w", encoding="utf-8") as f:
             json.dump(data, f, indent=4, default=str)
-        print(f"Data successfully saved to: {filepath}")
         return filepath
     except Exception as e:
         print(f"ERROR: JSON saving error: {e}")
