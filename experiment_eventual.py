@@ -14,7 +14,7 @@ def run_eventual_consistency_experiment(iterations=10):
     """
     log_info("START: Eventual Consistency Experiment (Lag Test) initiated", node="Exp1")
     print("\n" + "=" * 60)
-    print("🧪 EXPERIMENT 1: EVENTUAL CONSISTENCY (Replication Lag)")
+    print("EXPERIMENT 1: EVENTUAL CONSISTENCY (Replication Lag)")
     print("=" * 60)
     print(f"This experiment will be repeated for {iterations} different records.")
     print("In each iteration, the data written to the Leader VM will be monitored from the Follower VM in milliseconds.")
@@ -93,7 +93,7 @@ def run_eventual_consistency_experiment(iterations=10):
             results.append([i, record_id, movie_title, t_write_start, t_visible, attempts, round(lag_ms, 2)])
         else:
             log_info(f"[{i}/{iterations}] ERROR: Replication timeout on Follower after 15s!", node="Exp1")
-            print("   ❌ ERROR: Data did not reach the Follower within 15 seconds!")
+            print("   ERROR: ERROR: Data did not reach the Follower within 15 seconds!")
             results.append([i, record_id, movie_title, t_write_start, "TIMEOUT", attempts, -1])
             
         time.sleep(0.5)  # Short wait between iterations
@@ -113,7 +113,7 @@ def run_eventual_consistency_experiment(iterations=10):
     print_table(headers, results)
     
     print("=" * 60)
-    print("📊 SUMMARY STATISTICS:")
+    print("SUMMARY STATISTICS:")
     print(f"  Minimum Lag (Min Lag) : {min_lag:.2f} ms")
     print(f"  Maximum Lag (Max Lag): {max_lag:.2f} ms")
     print(f"  Average Lag (Avg Lag): {avg_lag:.2f} ms")

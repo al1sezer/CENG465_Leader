@@ -10,28 +10,28 @@ def view_database():
     print("=" * 60)
 
     # Movies
-    print("\n🎬 MOVIES (Filmler)")
+    print("\nMOVIES (Filmler)")
     print("-" * 40)
     cur.execute("SELECT id, title, genre, duration_min, version FROM movies ORDER BY id")
     for r in cur.fetchall():
         print(f"  ID:{r[0]} | {r[1]} | {r[2]} | {r[3]} dk | v{r[4]}")
 
     # Halls
-    print("\n🏛️  HALLS (Salonlar)")
+    print("\n HALLS (Salonlar)")
     print("-" * 40)
     cur.execute("SELECT id, name, capacity, version FROM halls ORDER BY id")
     for r in cur.fetchall():
         print(f"  ID:{r[0]} | {r[1]} | Kapasite: {r[2]} | v{r[3]}")
 
     # Seats count
-    print("\n💺 SEATS (Koltuklar)")
+    print("\nSEATS (Koltuklar)")
     print("-" * 40)
     cur.execute("SELECT h.name, count(s.id) FROM halls h JOIN seats s ON s.hall_id = h.id GROUP BY h.name ORDER BY h.name")
     for r in cur.fetchall():
         print(f"  {r[0]}: {r[1]} koltuk")
 
     # Showtimes
-    print("\n🕐 SHOWTIMES (Seanslar)")
+    print("\nSHOWTIMES (Seanslar)")
     print("-" * 40)
     cur.execute("""SELECT st.id, m.title, h.name, st.show_date, st.show_time 
                    FROM showtimes st JOIN movies m ON st.movie_id = m.id 
@@ -40,7 +40,7 @@ def view_database():
         print(f"  ID:{r[0]} | {r[1]} | {r[2]} | {r[3]} {r[4]}")
 
     # Reservations
-    print("\n🎫 RESERVATIONS (Rezervasyonlar)")
+    print("\nRESERVATIONS (Rezervasyonlar)")
     print("-" * 40)
     cur.execute("""SELECT r.id, m.title, h.name, s.row_label || s.seat_number, 
                    r.customer_name, r.status, r.version
@@ -51,7 +51,7 @@ def view_database():
         print(f"  ID:{r[0]} | {r[1]} | {r[2]} | Koltuk:{r[3]} | {r[4]} | {r[5]} | v{r[6]}")
 
     # Replication Log
-    print("\n📋 REPLICATION LOG")
+    print("\nREPLICATION LOG")
     print("-" * 40)
     cur.execute("SELECT log_id, operation_type, table_name, record_id, node FROM replication_log ORDER BY log_id")
     for r in cur.fetchall():

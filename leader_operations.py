@@ -49,7 +49,7 @@ def add_movie(title, genre, duration_min):
     }
     
     log_operation("INSERT", "movies", record_id, details)
-    print(f"🎬 [MOVIE ADDED] ID: {record_id} | Title: {title} | Genre: {genre} | Duration: {duration_min} min | Version: {version} | OpID: {operation_id}")
+    print(f"[MOVIE ADDED] ID: {record_id} | Title: {title} | Genre: {genre} | Duration: {duration_min} min | Version: {version} | OpID: {operation_id}")
     return record_id
 
 def update_movie(movie_id, new_title):
@@ -68,7 +68,7 @@ def update_movie(movie_id, new_title):
     result = execute_query(query, (new_title, timestamp, operation_id, movie_id), fetch_one=True)
     
     if result is None:
-        print(f"⚠️ [MOVIE UPDATE FAILED] Movie ID: {movie_id} not found!")
+        print(f"WARNING: [MOVIE UPDATE FAILED] Movie ID: {movie_id} not found!")
         return None
         
     new_version = result[0]
@@ -79,7 +79,7 @@ def update_movie(movie_id, new_title):
     }
     
     log_operation("UPDATE", "movies", movie_id, details)
-    print(f"🎬 [MOVIE UPDATED] ID: {movie_id} | New Title: {new_title} | New Version: {new_version} | OpID: {operation_id}")
+    print(f"[MOVIE UPDATED] ID: {movie_id} | New Title: {new_title} | New Version: {new_version} | OpID: {operation_id}")
     return new_version
 
 def delete_movie(movie_id):
@@ -91,7 +91,7 @@ def delete_movie(movie_id):
     select_result = execute_query(select_query, (movie_id,), fetch_one=True)
     
     if select_result is None:
-        print(f"⚠️ [MOVIE DELETE FAILED] Movie ID: {movie_id} not found!")
+        print(f"WARNING: [MOVIE DELETE FAILED] Movie ID: {movie_id} not found!")
         return False
         
     title = select_result[0]
@@ -105,7 +105,7 @@ def delete_movie(movie_id):
     }
     
     log_operation("DELETE", "movies", movie_id, details)
-    print(f"🎬 [MOVIE DELETED] ID: {movie_id} | Title: {title}")
+    print(f"[MOVIE DELETED] ID: {movie_id} | Title: {title}")
     return True
 
 # ============================================================================
@@ -137,7 +137,7 @@ def add_showtime(movie_id, hall_id, show_date, show_time):
     }
     
     log_operation("INSERT", "showtimes", record_id, details)
-    print(f"🕐 [SHOWTIME ADDED] ID: {record_id} | MovieID: {movie_id} | HallID: {hall_id} | Date: {show_date} | Time: {show_time} | Version: {version}")
+    print(f"[SHOWTIME ADDED] ID: {record_id} | MovieID: {movie_id} | HallID: {hall_id} | Date: {show_date} | Time: {show_time} | Version: {version}")
     return record_id
 
 # ============================================================================
@@ -159,7 +159,7 @@ def create_reservation(showtime_id, seat_id, customer_name):
     """
     check_result = execute_query(check_query, (showtime_id, seat_id), fetch_one=True)
     if check_result is not None:
-        print(f"⚠️ [RESERVATION FAILED] Seat is already reserved! (Seat ID: {seat_id}, Showtime ID: {showtime_id})")
+        print(f"WARNING: [RESERVATION FAILED] Seat is already reserved! (Seat ID: {seat_id}, Showtime ID: {showtime_id})")
         return None
         
     query = """
@@ -179,7 +179,7 @@ def create_reservation(showtime_id, seat_id, customer_name):
     }
     
     log_operation("INSERT", "reservations", record_id, details)
-    print(f"🎫 [RESERVATION CREATED] ID: {record_id} | Customer: {customer_name} | ShowtimeID: {showtime_id} | SeatID: {seat_id} | Version: {version}")
+    print(f"[RESERVATION CREATED] ID: {record_id} | Customer: {customer_name} | ShowtimeID: {showtime_id} | SeatID: {seat_id} | Version: {version}")
     return record_id
 
 def update_reservation(reservation_id, new_status):
@@ -197,7 +197,7 @@ def update_reservation(reservation_id, new_status):
     result = execute_query(query, (new_status, timestamp, operation_id, reservation_id), fetch_one=True)
     
     if result is None:
-        print(f"⚠️ [RESERVATION UPDATE FAILED] Reservation ID: {reservation_id} not found!")
+        print(f"WARNING: [RESERVATION UPDATE FAILED] Reservation ID: {reservation_id} not found!")
         return None
         
     new_version = result[0]
@@ -208,7 +208,7 @@ def update_reservation(reservation_id, new_status):
     }
     
     log_operation("UPDATE", "reservations", reservation_id, details)
-    print(f"🎫 [RESERVATION UPDATED] ID: {reservation_id} | New Status: {new_status} | New Version: {new_version} | OpID: {operation_id}")
+    print(f"[RESERVATION UPDATED] ID: {reservation_id} | New Status: {new_status} | New Version: {new_version} | OpID: {operation_id}")
     return new_version
 
 def cancel_reservation(reservation_id):
@@ -226,7 +226,7 @@ def delete_reservation(reservation_id):
     select_result = execute_query(select_query, (reservation_id,), fetch_one=True)
     
     if select_result is None:
-        print(f"⚠️ [RESERVATION DELETE FAILED] Reservation ID: {reservation_id} not found!")
+        print(f"WARNING: [RESERVATION DELETE FAILED] Reservation ID: {reservation_id} not found!")
         return False
         
     customer, showtime_id, seat_id = select_result
@@ -242,7 +242,7 @@ def delete_reservation(reservation_id):
     }
     
     log_operation("DELETE", "reservations", reservation_id, details)
-    print(f"🎫 [RESERVATION DELETED] ID: {reservation_id} | Customer: {customer} | ShowtimeID: {showtime_id}")
+    print(f"[RESERVATION DELETED] ID: {reservation_id} | Customer: {customer} | ShowtimeID: {showtime_id}")
     return True
 
 # ============================================================================
@@ -250,7 +250,7 @@ def delete_reservation(reservation_id):
 # ============================================================================
 if __name__ == "__main__":
     print("\n" + "=" * 60)
-    print("🎬 CENG 465 - LEADER CRUD OPERATIONS TEST")
+    print("CENG 465 - LEADER CRUD OPERATIONS TEST")
     print("=" * 60)
     
     # 1. MOVIE INSERT TEST
@@ -285,6 +285,6 @@ if __name__ == "__main__":
     delete_movie(movie_id)
     
     print("\n" + "=" * 60)
-    print("🎉 ALL CRUD TESTS COMPLETED SUCCESSFULLY!")
+    print("ALL CRUD TESTS COMPLETED SUCCESSFULLY!")
     print("Please check the local 'crud.log' file and the replication_log table.")
     print("=" * 60 + "\n")

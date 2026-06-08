@@ -6,7 +6,7 @@ import sys
 try:
     import matplotlib.pyplot as plt
 except ImportError:
-    print("⚠️ WARNING: matplotlib library is not installed! You need to install it to draw charts:")
+    print("WARNING: WARNING: matplotlib library is not installed! You need to install it to draw charts:")
     print("   pip install matplotlib")
     sys.exit(1)
 
@@ -20,7 +20,7 @@ def load_csv_data(filename):
     """
     filepath = os.path.join(RESULTS_DIR, filename)
     if not os.path.exists(filepath):
-        print(f"❌ Error: Data file not found: {filepath}")
+        print(f"ERROR: Error: Data file not found: {filepath}")
         return None
         
     data = []
@@ -67,7 +67,7 @@ def plot_eventual_consistency():
     output_path = os.path.join(RESULTS_DIR, "eventual_lag_plot.png")
     plt.savefig(output_path, dpi=300)
     plt.close()
-    print(f"📈 Chart generated: {output_path}")
+    print(f"Chart generated: {output_path}")
 
 def plot_monotonic_reads():
     """
@@ -124,7 +124,7 @@ def plot_monotonic_reads():
     output_path = os.path.join(RESULTS_DIR, "monotonic_reads_plot.png")
     plt.savefig(output_path, dpi=300)
     plt.close()
-    print(f"📈 Chart generated: {output_path}")
+    print(f"Chart generated: {output_path}")
 
 def plot_read_after_write():
     """
@@ -168,25 +168,25 @@ def plot_read_after_write():
     output_path = os.path.join(RESULTS_DIR, "read_after_write_plot.png")
     plt.savefig(output_path, dpi=300)
     plt.close()
-    print(f"📈 Chart generated: {output_path}")
+    print(f"Chart generated: {output_path}")
 
 def generate_all_plots():
     """
     Draws charts for all experiments and saves them to the results/ folder.
     """
     print("\n" + "=" * 60)
-    print("📊 MATPLOTLIB CHART VISUALIZATION STARTING")
+    print("MATPLOTLIB CHART VISUALIZATION STARTING")
     print("=" * 60)
     
     if not os.path.exists(RESULTS_DIR):
-        print("❌ Error: Results folder not found! Please run the experiments first.")
+        print("ERROR: Error: Results folder not found! Please run the experiments first.")
         return
         
     plot_eventual_consistency()
     plot_monotonic_reads()
     plot_read_after_write()
     
-    print("\n🎉 All charts successfully generated and saved to the 'results/' folder.")
+    print("\nAll charts successfully generated and saved to the 'results/' folder.")
     print("They are ready to be included in your LaTeX report!")
     print("=" * 60 + "\n")
 

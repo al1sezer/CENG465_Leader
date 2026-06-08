@@ -5,7 +5,7 @@ from db_config import LEADER_DB
 
 def reset_database_and_logs():
     print("=" * 60)
-    print("🧹 COMPREHENSIVE SYSTEM RESET & INITIALIZATION")
+    print("COMPREHENSIVE SYSTEM RESET & INITIALIZATION")
     print("=" * 60)
     
     # 1. Reset PostgreSQL tables and load seed data
@@ -30,7 +30,7 @@ def reset_database_and_logs():
         cur.close()
         conn.close()
     except Exception as e:
-        print(f"❌ Error resetting database: {e}")
+        print(f"ERROR: Error resetting database: {e}")
 
     # 2. Clear crud.log file
     crud_log_path = "crud.log"
@@ -38,9 +38,9 @@ def reset_database_and_logs():
     try:
         with open(crud_log_path, "w", encoding="utf-8") as f:
             f.write("")  # Clear contents
-        print(f"✅ {crud_log_path} successfully cleared.")
+        print(f"{crud_log_path} successfully cleared.")
     except Exception as e:
-        print(f"❌ Error clearing {crud_log_path}: {e}")
+        print(f"ERROR: Error clearing {crud_log_path}: {e}")
 
     # 3. Clean results directory
     results_dir = "results"
@@ -55,16 +55,16 @@ def reset_database_and_logs():
                     elif os.path.isdir(file_path):
                         shutil.rmtree(file_path)
                 except Exception as e:
-                    print(f"   ⚠️ Failed to delete {file_path}: {e}")
-            print(f"✅ {results_dir} folder successfully cleared.")
+                    print(f"   WARNING: Failed to delete {file_path}: {e}")
+            print(f"{results_dir} folder successfully cleared.")
         else:
             os.makedirs(results_dir)
-            print(f"✅ Created clean {results_dir} folder.")
+            print(f"Created clean {results_dir} folder.")
     except Exception as e:
-        print(f"❌ Error clearing results directory: {e}")
+        print(f"ERROR: Error clearing results directory: {e}")
 
     print("=" * 60)
-    print("🎉 SYSTEM SUCCESSFULLY RESET TO CLEAN SEEDED STATE!")
+    print("SYSTEM SUCCESSFULLY RESET TO CLEAN SEEDED STATE!")
     print("=" * 60)
 
 if __name__ == "__main__":

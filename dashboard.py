@@ -13,7 +13,7 @@ try:
     from experiment_concurrent import run_concurrent_writes_experiment
     from visualize import generate_all_plots
 except ImportError as e:
-    print(f"⚠️ Experiment files could not be loaded: {e}")
+    print(f"WARNING: Experiment files could not be loaded: {e}")
 
 app = Flask(__name__, template_folder="templates")
 
@@ -89,6 +89,19 @@ def get_db_state():
         """)
         logs = [{"log_id": r[0], "op_type": r[1], "table": r[2], "record_id": r[3], "details": r[4], "timestamp": str(r[5]), "node": r[6]} for r in cur.fetchall()]
         
+        # 5. Halls
+        cur.execute("SELECT id, name, capacity, version FROM halls ORDER BY id LIMIT 10;")
+        halls = [{"id": r[0], "name": r[1], "capacity": r[2], "version": r[3]} for r in cur.fetchall()]
+        
+        # 6. Seats
+        cur.execute("""
+            SELECT s.id, h.name, s.row_label || s.seat_number, s.version 
+            FROM seats s 
+            JOIN halls h ON s.hall_id = h.id 
+            ORDER BY s.id LIMIT 10;
+        """)
+        seats = [{"id": r[0], "hall": r[1], "seat": r[2], "version": r[3]} for r in cur.fetchall()]
+        
         cur.close()
         conn.close()
         
@@ -96,6 +109,8 @@ def get_db_state():
             "status": "success",
             "data": {
                 "movies": movies,
+                "halls": halls,
+                "seats": seats,
                 "showtimes": showtimes,
                 "reservations": reservations,
                 "replication_logs": logs
@@ -173,6 +188,81 @@ def run_experiment(name):
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
+@app.route('/api/table/<name>', methods=['GET'])
+def get_full_table(name):
+    """
+    Returns the complete list of rows and columns for a given database table,
+    allowing full inspection on the dashboard UI.
+    """
+    allowed_tables = ['movies', 'halls', 'seats', 'showtimes', 'reservations', 'replication_log']
+    if name not in allowed_tables:
+        return jsonify({"status": "error", "message": "Invalid table name"}), 400
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        if name == 'movies':
+            cur.execute("SELECT id, title, genre, duration_min, version, last_updated, operation_id FROM movies ORDER BY id;")
+            cols = ['id', 'title', 'genre', 'duration', 'version', 'last_updated', 'operation_id']
+        elif name == 'halls':
+            cur.execute("SELECT id, name, capacity, version, last_updated, operation_id FROM halls ORDER BY id;")
+            cols = ['id', 'name', 'capacity', 'version', 'last_updated', 'operation_id']
+        elif name == 'seats':
+            cur.execute("""
+                SELECT s.id, h.name, s.row_label || s.seat_number, s.version, s.last_updated, s.operation_id 
+                FROM seats s 
+                JOIN halls h ON s.hall_id = h.id 
+                ORDER BY s.id;
+            """)
+            cols = ['id', 'hall', 'seat', 'version', 'last_updated', 'operation_id']
+        elif name == 'showtimes':
+            cur.execute("""
+                SELECT st.id, m.title, h.name, st.show_date, st.show_time 
+                FROM showtimes st 
+                JOIN movies m ON st.movie_id = m.id 
+                JOIN halls h ON st.hall_id = h.id 
+                ORDER BY st.id;
+            """)
+            cols = ['id', 'movie', 'hall', 'date', 'time']
+        elif name == 'reservations':
+            cur.execute("""
+                SELECT r.id, m.title, h.name, s.row_label || s.seat_number, r.customer_name, r.status, r.version, r.last_updated, r.operation_id
+                FROM reservations r 
+                JOIN showtimes st ON r.showtime_id = st.id 
+                JOIN movies m ON st.movie_id = m.id 
+                JOIN halls h ON st.hall_id = h.id 
+                JOIN seats s ON r.seat_id = s.id 
+                ORDER BY r.id;
+            """)
+            cols = ['id', 'movie', 'hall', 'seat', 'customer', 'status', 'version', 'last_updated', 'operation_id']
+        elif name == 'replication_log':
+            cur.execute("SELECT log_id, operation_type, table_name, record_id, details, timestamp, node FROM replication_log ORDER BY log_id DESC;")
+            cols = ['log_id', 'op_type', 'table', 'record_id', 'details', 'timestamp', 'node']
+            
+        rows = cur.fetchall()
+        
+        # Serialize fields like timestamps or JSON dicts
+        serialized_rows = []
+        for r in rows:
+            serialized_row = {}
+            for idx, col in enumerate(cols):
+                val = r[idx]
+                if isinstance(val, datetime) or hasattr(val, 'isoformat'):
+                    serialized_row[col] = str(val)
+                elif col == 'details' and isinstance(val, dict):
+                    serialized_row[col] = json.dumps(val)
+                elif isinstance(val, dict):
+                    serialized_row[col] = json.dumps(val)
+                else:
+                    serialized_row[col] = val
+            serialized_rows.append(serialized_row)
+            
+        cur.close()
+        conn.close()
+        return jsonify({"status": "success", "columns": cols, "rows": serialized_rows})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
 # ============================================================================
 # APPLICATION BOOT
 # ============================================================================
@@ -183,7 +273,7 @@ if __name__ == '__main__':
         os.makedirs(RESULTS_DIR)
         
     print("\n" + "=" * 60)
-    print("🎬 CENG 465 - SINGLE-LEADER REPLICATION WEB DASHBOARD")
+    print("CENG 465 - SINGLE-LEADER REPLICATION WEB DASHBOARD")
     print("=" * 60)
     print("  Server Address: http://localhost:5000")
     print("  Please connect to this address from your browser.")

@@ -20,7 +20,7 @@ def run_concurrent_writes_experiment():
     """
     log_info("START: Concurrent Writes & Race Condition Experiment initiated", node="Exp4")
     print("\n" + "=" * 60)
-    print("🧪 EXPERIMENT 4: CONCURRENT WRITES & RACE CONDITION")
+    print("EXPERIMENT 4: CONCURRENT WRITES & RACE CONDITION")
     print("=" * 60)
 
     # ============================================================================
@@ -43,6 +43,15 @@ def run_concurrent_writes_experiment():
     # Use Seat IDs 13 to 32 (other seats in Hall A)
     seats_pool = list(range(13, 33))
     
+    # Resolve seat name helper
+    # Fetch seat names once before starting threads to avoid thread database contention
+    conn_seats = psycopg2.connect(**LEADER_DB)
+    cur_seats = conn_seats.cursor()
+    cur_seats.execute("SELECT id, row_label || seat_number FROM seats;")
+    seat_map = {row[0]: row[1] for row in cur_seats.fetchall()}
+    cur_seats.close()
+    conn_seats.close()
+
     leader_commits = []
     leader_commits_lock = threading.Lock()
     
@@ -68,17 +77,29 @@ def run_concurrent_writes_experiment():
             """
             cur.execute(query, (showtime_id, seat_id, customer, t_start, op_id))
             res_id = cur.fetchone()[0]
-            conn.commit()
             
-            # Write completion (commit) time
+            # Capture commit time before committing to database
             t_commit = datetime.now()
             
-            log_operation("INSERT", "reservations", res_id, {
-                "customer_name": customer,
-                "operation_id": op_id
-            })
+            # Write to replication_log table in the database in the SAME transaction
+            log_query = """
+                INSERT INTO replication_log (operation_type, table_name, record_id, details, timestamp, node) 
+                VALUES ('INSERT', 'reservations', %s, %s, %s, 'Leader')
+            """
+            import json
+            cur.execute(log_query, (res_id, json.dumps({"customer_name": customer, "operation_id": op_id}), t_commit))
+            
+            conn.commit()
+            
+            # Write to local file log (no DB write here since we did it inside transaction)
             log_info(f"Thread {thread_idx} wrote reservation ID {res_id} (Seat ID: {seat_id})", node="Exp4")
             
+            # Write to local file log specifically for crud.log format
+            time_str = t_start.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+            log_line = f"[{time_str}] NODE: Leader | OP: INSERT | TABLE: reservations    | ID: {res_id:<4d} | DETAILS: {json.dumps({'customer_name': customer, 'operation_id': op_id})}\n"
+            with open("crud.log", "a", encoding="utf-8") as f_log:
+                f_log.write(log_line)
+                
             cur.close()
             conn.close()
             
@@ -87,13 +108,14 @@ def run_concurrent_writes_experiment():
                     "thread": thread_idx,
                     "res_id": res_id,
                     "seat_id": seat_id,
+                    "seat_name": seat_map[seat_id],
                     "customer": customer,
                     "start_time": t_start,
                     "commit_time": t_commit,
                     "op_id": op_id
                 })
         except Exception as e:
-            print(f"   ❌ Thread {thread_idx} Error: {e}")
+            print(f"   ERROR: Thread {thread_idx} Error: {e}")
 
     # Create and start worker threads
     threads = []
@@ -117,12 +139,12 @@ def run_concurrent_writes_experiment():
     conn_f = psycopg2.connect(**FOLLOWER_DB)
     cur_f = conn_f.cursor()
     
-    # Fetch logs only for records we added
+    # Fetch logs only for records we added (ordered by commit timestamp)
     query_f = """
         SELECT record_id, timestamp, details->>'customer_name' 
         FROM replication_log 
         WHERE table_name = 'reservations' AND details->>'customer_name' LIKE 'Concurrent_Cust_%%'
-        ORDER BY log_id ASC;
+        ORDER BY timestamp ASC;
     """
     cur_f.execute(query_f)
     follower_logs = cur_f.fetchall()
@@ -134,10 +156,10 @@ def run_concurrent_writes_experiment():
     order_preservation_results = []
     out_of_order_count = 0
     
-    print("\n📊 LEADER COMMIT ORDER vs FOLLOWER REPLICATION LOG ORDER:")
-    print("-" * 105)
-    print(f"{'Order':<5s} | {'Write ID':<8s} | {'Customer Name':<22s} | {'Leader Commit':<22s} | {'Follower Log':<22s} | {'Status'}")
-    print("-" * 105)
+    print("\nLEADER COMMIT ORDER vs FOLLOWER REPLICATION LOG ORDER:")
+    print("-" * 120)
+    print(f"{'Order':<5s} | {'Write ID':<8s} | {'Seat':<6s} | {'Customer Name':<22s} | {'Leader Commit':<22s} | {'Follower Log':<22s} | {'Status'}")
+    print("-" * 120)
     
     for seq, l_item in enumerate(leader_commits):
         # Find this record_id in the Follower logs and get its sequence
@@ -157,10 +179,10 @@ def run_concurrent_writes_experiment():
         l_time_str = l_item["commit_time"].strftime('%H:%M:%S.%f')[:-3]
         f_time_str = f_time.strftime('%H:%M:%S.%f')[:-3] if f_time else "NOT FOUND"
         
-        print(f"#{seq+1:<4d} | ID:{l_item['res_id']:<4d} | {l_item['customer']:<22s} | {l_time_str:<22s} | {f_time_str:<22s} | {status}")
+        print(f"#{seq+1:<4d} | ID:{l_item['res_id']:<4d} | {l_item['seat_name']:<6s} | {l_item['customer']:<22s} | {l_time_str:<22s} | {f_time_str:<22s} | {status}")
         order_preservation_results.append([seq+1, l_item['res_id'], l_item['customer'], l_time_str, f_time_str, status])
 
-    print("-" * 105)
+    print("-" * 120)
     print(f"Ordering Violation Count (Out-of-Order Replication): {out_of_order_count} (Expected: 0 - Because WAL is applied sequentially in a single thread!)")
     log_info(f"Part 1 Verified: Replication order preservation complete. Out-of-order count: {out_of_order_count}", node="Exp4")
     
@@ -175,13 +197,17 @@ def run_concurrent_writes_experiment():
     race_results_lock = threading.Lock()
     race_barrier = threading.Barrier(2)
     
-    # Cleanup: Delete any existing active reservation for Seat B5
-    conn_clean = psycopg2.connect(**LEADER_DB)
-    cur_clean = conn_clean.cursor()
-    cur_clean.execute("DELETE FROM reservations WHERE showtime_id = 1 AND seat_id = 10;")
-    conn_clean.commit()
-    cur_clean.close()
-    conn_clean.close()
+    # Resolve Seat ID 10 name dynamically
+    conn_seats = psycopg2.connect(**LEADER_DB)
+    cur_seats = conn_seats.cursor()
+    cur_seats.execute("SELECT row_label || seat_number FROM seats WHERE id = 10;")
+    seat_10_name = cur_seats.fetchone()[0]
+    
+    # Cleanup: Delete any existing active reservation for Seat B5 (SeatID: 10)
+    cur_seats.execute("DELETE FROM reservations WHERE showtime_id = 1 AND seat_id = 10;")
+    conn_seats.commit()
+    cur_seats.close()
+    conn_seats.close()
 
     def booking_racer(racer_id):
         customer = f"Racer_Client_{racer_id}"
@@ -216,16 +242,24 @@ def run_concurrent_writes_experiment():
                     VALUES (1, 10, %s, 'reserved', 1, %s, %s) RETURNING id;
                 """, (customer, t_start, op_id))
                 res_id = cur.fetchone()[0]
-                conn.commit()
-                status_text = "SUCCESS (Reservation Made)"
                 
-                log_operation("INSERT", "reservations", res_id, {
-                    "customer_name": customer,
-                    "seat_id": 10,
-                    "racer_id": racer_id
-                })
+                # Write to replication_log in SAME transaction
+                log_query = """
+                    INSERT INTO replication_log (operation_type, table_name, record_id, details, timestamp, node) 
+                    VALUES ('INSERT', 'reservations', %s, %s, %s, 'Leader')
+                """
+                import json
+                cur.execute(log_query, (res_id, json.dumps({"customer_name": customer, "seat_id": 10, "racer_id": racer_id}), t_start))
+                
+                conn.commit()
+                status_text = f"SUCCESS (Seat {seat_10_name} Reserved!)"
+                
+                # Write to local crud.log
+                log_line = f"[{t_start.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]}] NODE: Leader | OP: INSERT | TABLE: reservations    | ID: {res_id:<4d} | DETAILS: {json.dumps({'customer_name': customer, 'seat_id': 10})}\n"
+                with open("crud.log", "a", encoding="utf-8") as f_log:
+                    f_log.write(log_line)
             else:
-                status_text = "REJECTED (Seat Full)"
+                status_text = f"REJECTED (Seat {seat_10_name} already FULL)"
                 
             cur.close()
             conn.close()
@@ -260,21 +294,27 @@ def run_concurrent_writes_experiment():
     t1.join()
     t2.join()
     
-    print("\n📊 RACE RESULTS:")
-    print("-" * 75)
+    print("\nCONCURRENT RACERS RESULTS:")
+    print("-" * 90)
     for r in race_results:
         print(f"  Racer #{r['racer_id']} ({r['customer']}) | Time: {r['time']} | Result: {r['status']} | Res.ID: {r['res_id']}")
-    print("-" * 75)
+    print("-" * 90)
     
     double_booked = all(r["status"].startswith("SUCCESS") for r in race_results)
     log_info(f"Part 2 Analysis: Double Booking Occurred = {double_booked}", node="Exp4")
     if double_booked:
-        print("  ⚠️ ANALYSIS: RACE CONDITION OCCURRED!")
-        print("  The same seat was reserved for two different users simultaneously (Double Booking!).")
-        print("  Because the SELECT check in the application layer was done concurrently, and no")
-        print("  unique constraint or SELECT FOR UPDATE lock was used at the database level.")
+        print("  ANALYSIS: RACE CONDITION OCCURRED!")
+        print(f"  The same physical seat ({seat_10_name}) was double-booked for two different users simultaneously!")
+        print("  [PROOF OF CONFLICT IN DATABASE]")
+        print("  ---------------------------------------------------------------------------------")
+        print(f"  Seat        : {seat_10_name} (Seat ID: 10)")
+        print(f"  Booking 1   : Customer = {race_results[0]['customer']} (Res ID: {race_results[0]['res_id']})")
+        print(f"  Booking 2   : Customer = {race_results[1]['customer']} (Res ID: {race_results[1]['res_id']})")
+        print("  ---------------------------------------------------------------------------------")
+        print("  Because the application performed a SELECT check concurrently without locking,")
+        print("  both transactions saw the seat as EMPTY and successfully committed their writes.")
     else:
-        print("  ✅ ANALYSIS: Race condition did not occur (one thread blocked the other).")
+        print("  ANALYSIS: Race condition did not occur (one thread blocked the other).")
         
     print("=" * 60)
 
