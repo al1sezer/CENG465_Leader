@@ -4,21 +4,12 @@ import time
 from datetime import datetime
 from db_config import LEADER_DB, FOLLOWER_DB
 from logger import log_operation, log_info
-from utils import save_to_csv, save_to_json, print_table
+from utils import save_to_csv, save_to_json
 
-def run_eventual_consistency_experiment(iterations=10):
-    """
-    Eventual Consistency Experiment:
-    Inserts new movies to the Leader and measures the time it takes for each to become visible in the Follower
-    (replication lag) with millisecond precision.
-    """
-    log_info("START: Eventual Consistency Experiment (Lag Test) initiated", node="Exp1")
-    print("\n" + "=" * 60)
-    print("EXPERIMENT 1: EVENTUAL CONSISTENCY (Replication Lag)")
-    print("=" * 60)
-    print(f"This experiment will be repeated for {iterations} different records.")
-    print("In each iteration, the data written to the Leader VM will be monitored from the Follower VM in milliseconds.")
-    print("=" * 60)
+def run_eventual_consistency_experiment(iterations=10, use_persistent=False):
+    """Run eventual consistency experiment measuring replication lag."""
+    log_info(f"START: Eventual Consistency Experiment (Lag Test) initiated (use_persistent={use_persistent})", node="Exp1")
+    print("\nEXPERIMENT 1: EVENTUAL CONSISTENCY (Replication Lag)")
 
     results = []
     
@@ -31,90 +22,266 @@ def run_eventual_consistency_experiment(iterations=10):
     print(row_format.format(*headers))
     print(border)
     
+    conn_sync = psycopg2.connect(**LEADER_DB)
+    cur_sync = conn_sync.cursor()
+    cur_sync.execute("SELECT setval(pg_get_serial_sequence('movies', 'id'), COALESCE(MAX(id), 1)) FROM movies;")
+    cur_sync.execute("SELECT setval(pg_get_serial_sequence('showtimes', 'id'), COALESCE(MAX(id), 1)) FROM showtimes;")
+    cur_sync.execute("SELECT setval(pg_get_serial_sequence('reservations', 'id'), COALESCE(MAX(id), 1)) FROM reservations;")
+    conn_sync.commit()
+    cur_sync.close()
+    conn_sync.close()
+    
+    conn_l_persist = None
+    cur_l_persist = None
+    conn_f_persist = None
+    cur_f_persist = None
+    
+    if use_persistent:
+        conn_l_persist = psycopg2.connect(**LEADER_DB)
+        cur_l_persist = conn_l_persist.cursor()
+        conn_f_persist = psycopg2.connect(**FOLLOWER_DB)
+        cur_f_persist = conn_f_persist.cursor()
+    
+    run_counter = 0
     for i in range(1, iterations + 1):
-        movie_title = f"Exp1_Movie_{int(time.time())}_{i}"
+        movie_title_base = f"Exp1_Movie_{int(time.time())}_{i}"
         genre = "Thriller"
         duration = 120 + i
         operation_id = str(uuid.uuid4())
         
-        log_info(f"[{i}/{iterations}] Writing movie: '{movie_title}' to Leader...", node="Exp1")
+        # 1. INSERT
+        run_counter += 1
+        movie_title_insert = f"{movie_title_base}_INSERT"
+        log_info(f"[{i}/{iterations}] [INSERT] Writing movie: '{movie_title_insert}' to Leader...", node="Exp1")
         
-        # 1. Write to Leader DB (INSERT)
-        conn_l = psycopg2.connect(**LEADER_DB)
-        cur_l = conn_l.cursor()
-        
-        t_write_start = datetime.now()
-        
+        if use_persistent:
+            conn_l = conn_l_persist
+            cur_l = cur_l_persist
+        else:
+            conn_l = psycopg2.connect(**LEADER_DB)
+            cur_l = conn_l.cursor()
+            
+        t_insert_time = datetime.now()
         query_insert = """
             INSERT INTO movies (title, genre, duration_min, version, last_updated, operation_id) 
-            VALUES (%s, %s, %s, 1, %s, %s) RETURNING id, last_updated;
+            VALUES (%s, %s, %s, 1, %s, %s) RETURNING id;
         """
-        cur_l.execute(query_insert, (movie_title, genre, duration, t_write_start, operation_id))
-        record_id, last_updated_leader = cur_l.fetchone()
-        
+        cur_l.execute(query_insert, (movie_title_insert, genre, duration, t_insert_time, operation_id))
+        record_id = cur_l.fetchone()[0]
         conn_l.commit()
+        t_write_committed = datetime.now()
         
-        # Log record on the Leader side
-        log_operation("INSERT", "movies", record_id, {
-            "title": movie_title,
-            "operation_id": operation_id
-        })
-        
-        cur_l.close()
-        conn_l.close()
-        
-        # 2. Follower DB Polling (Live Monitoring with Frequent Reads)
-        conn_f = psycopg2.connect(**FOLLOWER_DB)
-        cur_f = conn_f.cursor()
-        
+        if not use_persistent:
+            cur_l.close()
+            conn_l.close()
+            log_operation("INSERT", "movies", record_id, {
+                "title": movie_title_insert,
+                "operation_id": operation_id
+            })
+            
+        if use_persistent:
+            conn_f = conn_f_persist
+            cur_f = cur_f_persist
+        else:
+            conn_f = psycopg2.connect(**FOLLOWER_DB)
+            cur_f = conn_f.cursor()
+            
         t_poll_start = time.time()
         t_visible = None
         attempts = 0
-        
-        query_select = "SELECT last_updated FROM movies WHERE id = %s;"
-        
-        while time.time() - t_poll_start < 15:  # 15 seconds timeout
+        while time.time() - t_poll_start < 15:
             attempts += 1
-            cur_f.execute(query_select, (record_id,))
+            cur_f.execute("SELECT last_updated FROM movies WHERE id = %s;", (record_id,))
             row = cur_f.fetchone()
-            
             if row:
                 t_visible = datetime.now()
-                last_updated_follower = row[0]
                 break
+            time.sleep(0.001)
             
-            time.sleep(0.001)  # Very high precision with 1ms wait
+        if not use_persistent:
+            cur_f.close()
+            conn_f.close()
             
-        cur_f.close()
-        conn_f.close()
-        
-        # 3. Calculating and Saving Results
+        if use_persistent:
+            log_operation("INSERT", "movies", record_id, {
+                "title": movie_title_insert,
+                "operation_id": operation_id
+            })
+            
         if t_visible:
-            # Replication lag: The difference between the time data is visible in the Follower and the time it was written to the Leader
-            lag_ms = (t_visible - t_write_start).total_seconds() * 1000.0
-            log_info(f"[{i}/{iterations}] Replicated to Follower! (Attempts: {attempts}, Lag: {lag_ms:.2f}ms)", node="Exp1")
-            results.append([i, record_id, movie_title, t_write_start, t_visible, attempts, round(lag_ms, 2)])
-            
+            lag_ms = (t_visible - t_write_committed).total_seconds() * 1000.0
+            log_info(f"[{i}/{iterations}] [INSERT] Replicated! (Lag: {lag_ms:.2f}ms)", node="Exp1")
+            results.append([run_counter, record_id, movie_title_insert, t_write_committed, t_visible, attempts, round(lag_ms, 2)])
             lag_ms_str = f"{lag_ms:.2f}"
-            visible_time_str = t_visible.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+            visible_time_str = t_visible.strftime('%H:%M:%S.%f')[:-3]
         else:
-            log_info(f"[{i}/{iterations}] ERROR: Replication timeout on Follower after 15s!", node="Exp1")
-            results.append([i, record_id, movie_title, t_write_start, "TIMEOUT", attempts, -1])
-            
+            log_info(f"[{i}/{iterations}] [INSERT] ERROR: Timeout!", node="Exp1")
+            results.append([run_counter, record_id, movie_title_insert, t_write_committed, "TIMEOUT", attempts, -1])
             lag_ms_str = "-1.00"
             visible_time_str = "TIMEOUT"
             
-        write_time_str = t_write_start.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
-        row = [str(i), str(record_id), movie_title, write_time_str, visible_time_str, str(attempts), lag_ms_str]
-        print(row_format.format(*row))
+        write_time_str = t_write_committed.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+        row_disp = [str(run_counter), str(record_id), movie_title_insert, write_time_str, visible_time_str, str(attempts), lag_ms_str]
+        print(row_format.format(*row_disp))
+        
+        time.sleep(0.2)
+        
+        # 2. UPDATE
+        run_counter += 1
+        movie_title_update = f"{movie_title_base}_UPDATE"
+        log_info(f"[{i}/{iterations}] [UPDATE] Updating movie ID {record_id} to '{movie_title_update}' on Leader...", node="Exp1")
+        
+        if use_persistent:
+            conn_l = conn_l_persist
+            cur_l = cur_l_persist
+        else:
+            conn_l = psycopg2.connect(**LEADER_DB)
+            cur_l = conn_l.cursor()
             
-        time.sleep(0.5)  # Short wait between iterations
+        t_update_time = datetime.now()
+        query_update = """
+            UPDATE movies SET title = %s, version = 2, last_updated = %s, operation_id = %s WHERE id = %s;
+        """
+        cur_l.execute(query_update, (movie_title_update, t_update_time, operation_id, record_id))
+        conn_l.commit()
+        t_update_committed = datetime.now()
+        
+        if not use_persistent:
+            cur_l.close()
+            conn_l.close()
+            log_operation("UPDATE", "movies", record_id, {
+                "title": movie_title_update,
+                "operation_id": operation_id
+            })
+            
+        if use_persistent:
+            conn_f = conn_f_persist
+            cur_f = cur_f_persist
+        else:
+            conn_f = psycopg2.connect(**FOLLOWER_DB)
+            cur_f = conn_f.cursor()
+            
+        t_poll_start = time.time()
+        t_visible_update = None
+        attempts = 0
+        while time.time() - t_poll_start < 15:
+            attempts += 1
+            cur_f.execute("SELECT version, title FROM movies WHERE id = %s;", (record_id,))
+            row = cur_f.fetchone()
+            if row and row[0] == 2 and row[1] == movie_title_update:
+                t_visible_update = datetime.now()
+                break
+            time.sleep(0.001)
+            
+        if not use_persistent:
+            cur_f.close()
+            conn_f.close()
+            
+        if use_persistent:
+            log_operation("UPDATE", "movies", record_id, {
+                "title": movie_title_update,
+                "operation_id": operation_id
+            })
+            
+        if t_visible_update:
+            lag_ms = (t_visible_update - t_update_committed).total_seconds() * 1000.0
+            log_info(f"[{i}/{iterations}] [UPDATE] Replicated! (Lag: {lag_ms:.2f}ms)", node="Exp1")
+            results.append([run_counter, record_id, movie_title_update, t_update_committed, t_visible_update, attempts, round(lag_ms, 2)])
+            lag_ms_str = f"{lag_ms:.2f}"
+            visible_time_str = t_visible_update.strftime('%H:%M:%S.%f')[:-3]
+        else:
+            log_info(f"[{i}/{iterations}] [UPDATE] ERROR: Timeout!", node="Exp1")
+            results.append([run_counter, record_id, movie_title_update, t_update_committed, "TIMEOUT", attempts, -1])
+            lag_ms_str = "-1.00"
+            visible_time_str = "TIMEOUT"
+            
+        write_time_str = t_update_committed.strftime('%H:%M:%S.%f')[:-3]
+        row_disp = [str(run_counter), str(record_id), movie_title_update, write_time_str, visible_time_str, str(attempts), lag_ms_str]
+        print(row_format.format(*row_disp))
+        
+        time.sleep(0.2)
+        
+        # 3. DELETE
+        run_counter += 1
+        movie_title_delete = f"{movie_title_base}_DELETE"
+        log_info(f"[{i}/{iterations}] [DELETE] Deleting movie ID {record_id} on Leader...", node="Exp1")
+        
+        if use_persistent:
+            conn_l = conn_l_persist
+            cur_l = cur_l_persist
+        else:
+            conn_l = psycopg2.connect(**LEADER_DB)
+            cur_l = conn_l.cursor()
+            
+        query_delete = "DELETE FROM movies WHERE id = %s;"
+        cur_l.execute(query_delete, (record_id,))
+        conn_l.commit()
+        t_delete_committed = datetime.now()
+        
+        if not use_persistent:
+            cur_l.close()
+            conn_l.close()
+            log_operation("DELETE", "movies", record_id, {
+                "title": movie_title_delete,
+                "operation_id": operation_id
+            })
+            
+        if use_persistent:
+            conn_f = conn_f_persist
+            cur_f = cur_f_persist
+        else:
+            conn_f = psycopg2.connect(**FOLLOWER_DB)
+            cur_f = conn_f.cursor()
+            
+        t_poll_start = time.time()
+        t_visible_delete = None
+        attempts = 0
+        while time.time() - t_poll_start < 15:
+            attempts += 1
+            cur_f.execute("SELECT id FROM movies WHERE id = %s;", (record_id,))
+            row = cur_f.fetchone()
+            if not row:
+                t_visible_delete = datetime.now()
+                break
+            time.sleep(0.001)
+            
+        if not use_persistent:
+            cur_f.close()
+            conn_f.close()
+            
+        if use_persistent:
+            log_operation("DELETE", "movies", record_id, {
+                "title": movie_title_delete,
+                "operation_id": operation_id
+            })
+            
+        if t_visible_delete:
+            lag_ms = (t_visible_delete - t_delete_committed).total_seconds() * 1000.0
+            log_info(f"[{i}/{iterations}] [DELETE] Replicated! (Lag: {lag_ms:.2f}ms)", node="Exp1")
+            results.append([run_counter, record_id, movie_title_delete, t_delete_committed, t_visible_delete, attempts, round(lag_ms, 2)])
+            lag_ms_str = f"{lag_ms:.2f}"
+            visible_time_str = t_visible_delete.strftime('%H:%M:%S.%f')[:-3]
+        else:
+            log_info(f"[{i}/{iterations}] [DELETE] ERROR: Timeout!", node="Exp1")
+            results.append([run_counter, record_id, movie_title_delete, t_delete_committed, "TIMEOUT", attempts, -1])
+            lag_ms_str = "-1.00"
+            visible_time_str = "TIMEOUT"
+            
+        write_time_str = t_delete_committed.strftime('%H:%M:%S.%f')[:-3]
+        row_disp = [str(run_counter), str(record_id), movie_title_delete, write_time_str, visible_time_str, str(attempts), lag_ms_str]
+        print(row_format.format(*row_disp))
+        
+        time.sleep(0.5)
+
+    if use_persistent:
+        cur_l_persist.close()
+        conn_l_persist.close()
+        cur_f_persist.close()
+        conn_f_persist.close()
 
     print(border)
 
-    # 4. Evaluating & Reporting Results
     valid_lags = [r[6] for r in results if r[6] > 0]
-    
     if valid_lags:
         min_lag = min(valid_lags)
         max_lag = max(valid_lags)
@@ -131,8 +298,6 @@ def run_eventual_consistency_experiment(iterations=10):
     print(f"  Average Lag (Avg Lag): {avg_lag:.2f} ms")
     print("=" * 60)
 
-    
-    # Save data to disk
     save_to_csv("eventual_results.csv", headers, results)
     
     json_data = {
@@ -159,4 +324,4 @@ def run_eventual_consistency_experiment(iterations=10):
     save_to_json("eventual_results.json", json_data)
 
 if __name__ == "__main__":
-    run_eventual_consistency_experiment(10)
+    run_eventual_consistency_experiment(10, use_persistent=True)

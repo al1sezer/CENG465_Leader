@@ -1,0 +1,763 @@
+\documentclass[12pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[english]{babel}
+\usepackage{geometry}
+\geometry{a4paper, margin=1in}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{listings}
+\usepackage{color}
+\usepackage{amsmath}
+\usepackage{hyperref}
+\usepackage{float}
+
+\definecolor{codegreen}{rgb}{0,0.6,0}
+\definecolor{codegray}{rgb}{0.5,0.5,0.5}
+\definecolor{codepurple}{rgb}{0.58,0,0.82}
+\definecolor{backcolour}{rgb}{0.95,0.95,0.92}
+
+\lstdefinestyle{mystyle}{
+    backgroundcolor=\color{backcolour},   
+    commentstyle=\color{codegreen},
+    keywordstyle=\color{magenta},
+    numberstyle=\tiny\color{codegray},
+    stringstyle=\color{codepurple},
+    basicstyle=\ttfamily\footnotesize,
+    breakatwhitespace=false,         
+    breaklines=true,                 
+    captionpos=b,                    
+    keepspaces=true,                 
+    numbers=left,                    
+    numbersep=5pt,                  
+    showspaces=false,                
+    showstringspaces=false,
+    showtabs=false,                  
+    tabsize=2
+}
+
+\lstset{style=mystyle}
+
+\title{\textbf{CENG 465 Principles of Data-Intensive Systems}\\
+\Large Data Replication in a Single-Leader Environment\\
+\large Final Project Report}
+\author{
+\textbf{Ali Ekin \"Oz\c{c}etin} --- 290201047 \\
+\textbf{Ali Sezer Uysal} --- 290201046 \\[10pt]
+\institute{Izmir Institute of Technology \\ Computer Engineering Department}\\
+\textbf{Group 10 (G10)}
+}
+\date{}
+
+\begin{document}
+
+\maketitle
+
+\newpage
+\tableofcontents
+\newpage
+
+% ===========================================================================
+% SECTION 1: INTRODUCTION
+% ===========================================================================
+\section{Introduction}
+This report describes our design, implementation, and test results for a single-leader database replication setup. We configured a distributed environment on Microsoft Azure and tested four consistency models:
+\begin{enumerate}
+    \item \textbf{Experiment 1: Eventual Consistency} --- Measuring replication lag between Leader and Follower.
+    \item \textbf{Experiment 2: Monotonic Reads} --- Demonstrating version rollback anomalies under multi-node query routing.
+    \item \textbf{Experiment 3: Read-After-Write (RAW) Consistency} --- Verifying immediate read-back visibility of client writes.
+    \item \textbf{Experiment 4: Concurrent Writes} --- Analyzing WAL ordering preservation and application-level race conditions.
+\end{enumerate}
+
+The report covers our network architecture, database schema, logging system, CRUD operations, and the exact steps and findings for each experiment.
+
+% ===========================================================================
+% SECTION 2: SYSTEM ARCHITECTURE
+% ===========================================================================
+\section{System Architecture and Environment Setup}
+
+\subsection{Distributed Topology}
+The system is deployed on two Azure Virtual Machines within the same Virtual Network (VNet), satisfying the project's requirement for a truly distributed environment (no Docker or single-machine virtualization):
+
+\begin{itemize}
+    \item \textbf{Leader VM (Primary):} IP \texttt{10.0.0.4} --- Handles all write operations. Runs the experiment scripts, Flask web dashboard (\texttt{dashboard.py} on port 5000), CRUD operation layer (\texttt{leader\_operations.py}), and the logging module (\texttt{logger.py}).
+    \item \textbf{Follower VM (Secondary):} IP \texttt{10.0.0.5} --- Read-only replica. Runs the interactive monitoring tool (\texttt{follower\_monitor.py}) with experiment-specific companion modes for live observation.
+\end{itemize}
+
+
+\subsection{Replication Configuration}
+PostgreSQL 16 streaming replication is configured between the two nodes with the following critical parameters in \texttt{postgresql.conf}:
+
+\begin{itemize}
+    \item \textbf{Leader Configuration:}
+    \begin{itemize}
+        \item \texttt{listen\_addresses = '*'} --- Allows the database server to listen on all network interfaces for remote connections from the Follower.
+        \item \texttt{wal\_level = replica} --- Writes sufficient data to the Write-Ahead Log (WAL) to support archiving and read-only replication.
+        \item \texttt{max\_wal\_senders = 10} --- Permits up to 10 concurrent replication connections from standby nodes.
+    \end{itemize}
+    \item \textbf{Follower Configuration:}
+    \begin{itemize}
+        \item \texttt{hot\_standby = on} --- Allows the Follower to accept read-only queries during active replication, which is essential for observing lag and version rollbacks.
+    \end{itemize}
+\end{itemize}
+
+Additionally, host-based security rules in \texttt{pg\_hba.conf} control remote authentication:
+\begin{itemize}
+    \item \texttt{host replication replicator 10.0.0.5/32 scram-sha-256} --- Restricts replication access exclusively to the Follower IP using a dedicated \texttt{replicator} user.
+    \item \texttt{host all all 10.0.0.5/32 md5} --- Permits client query connections from the Follower VM to enable remote database inspection.
+\end{itemize}
+
+
+\subsection{Software Stack}
+\begin{itemize}
+    \item \textbf{Database:} PostgreSQL 16 with \texttt{uuid-ossp} extension for UUID generation.
+    \item \textbf{Client Language:} Python 3.12 with \texttt{psycopg2} for database connectivity.
+    \item \textbf{Web Dashboard:} Flask-based UI for triggering experiments and viewing results (\texttt{dashboard.py}).
+    \item \textbf{Visualization:} Matplotlib for generating experiment charts (\texttt{visualize.py}).
+    \item \textbf{Configuration:} Database credentials managed via environment variables with fallback defaults (\texttt{db\_config.py}).
+\end{itemize}
+
+% ===========================================================================
+% SECTION 3: SCHEMA DESIGN
+% ===========================================================================
+\section{Database Schema Design}
+
+We designed a cinema ticket reservation system as the application domain, providing a realistic context for observing replication and consistency behavior. The schema consists of six tables.
+
+\subsection{Table Descriptions and Purpose}
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{p{3cm} p{5.5cm} p{5cm}}
+\toprule
+\textbf{Table} & \textbf{Purpose} & \textbf{Used In} \\
+\midrule
+\texttt{movies} & Stores film catalog & Experiment 1 (INSERT target) \\
+\texttt{halls} & Cinema hall definitions (2 halls) & Seed data for seats \\
+\texttt{seats} & Physical seat inventory (45 seats) & Experiments 3 \& 4 \\
+\texttt{showtimes} & Screening schedule (movie + hall + time) & Experiments 2, 3, \& 4 \\
+\texttt{reservations} & Ticket bookings with status tracking & Experiments 2, 3, \& 4 \\
+\texttt{replication\_log} & Operation audit trail for replication analysis & All experiments (logging) \\
+\bottomrule
+\end{tabular}
+\caption{Schema tables and their roles in the experiments}
+\label{tab:tables}
+\end{table}
+
+\subsection{Tracking Fields for Replication Analysis}
+Every data table (movies, halls, seats, showtimes, reservations) includes three tracking fields specifically designed for observing replication behavior:
+
+\begin{itemize}
+    \item \texttt{version} (INTEGER, default 1): Incremented on every UPDATE. Used in Experiment 2 (Monotonic Reads) to detect whether version numbers go backward across nodes.
+    \item \texttt{last\_updated} (TIMESTAMP): Records the exact write time with microsecond precision. Used in Experiment 1 to calculate replication lag ($T_{\text{visible}} - T_{\text{write}}$).
+    \item \texttt{operation\_id} (UUID): A unique ID for each write. We use this to verify that the exact same write was replicated to the Follower, checking that data was replicated correctly.
+\end{itemize}
+
+\subsection{Seed Data}
+The \texttt{reset\_db.py} script initializes the database with:
+\begin{itemize}
+    \item 3 movies (Inception, The Dark Knight, Interstellar)
+    \item 2 halls: Hall A (25 seats, 5 rows $\times$ 5 columns) and Hall B (20 seats, 4 rows $\times$ 5 columns)
+    \item 45 seats total (auto-generated with row labels A--E and seat numbers 1--5)
+    \item \texttt{showtimes} and \texttt{reservations} tables are left empty for experiments to populate dynamically
+\end{itemize}
+
+The complete SQL DDL for all six tables is provided in \textbf{Appendix A}.
+
+% ===========================================================================
+% SECTION 4: REPLICATION LOGGING
+% ===========================================================================
+\section{Replication Logging Mechanism}
+
+To track every write operation and measure replication behavior, we implemented a dual-layer logging system in \texttt{logger.py}.
+
+\subsection{Layer 1: Database Log (\texttt{replication\_log} table)}
+Every INSERT, UPDATE, and DELETE operation inserts a record into the \texttt{replication\_log} table on the Leader. Since this table is part of the replicated database, these log entries are automatically streamed to the Follower via WAL, enabling the Follower's monitoring tool to observe replication activity in real time.
+
+\begin{lstlisting}[language=SQL, caption=replication\_log Table Schema]
+CREATE TABLE replication_log (
+    log_id         SERIAL PRIMARY KEY,
+    operation_type VARCHAR(10) NOT NULL 
+                   CHECK (operation_type IN ('INSERT', 'UPDATE', 'DELETE')),
+    table_name     VARCHAR(50) NOT NULL,
+    record_id      INTEGER NOT NULL,
+    details        JSONB DEFAULT '{}',
+    timestamp      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    node           VARCHAR(20) NOT NULL DEFAULT 'Leader'
+);
+\end{lstlisting}
+
+\subsection{Layer 2: Local File Log (\texttt{crud.log})}
+In parallel, a human-readable log line is appended to a local \texttt{crud.log} file with millisecond-precision timestamps:
+\begin{lstlisting}[caption=Example crud.log Entry, basicstyle=\ttfamily\scriptsize]
+[2026-06-07 14:30:12.345] NODE: Leader | OP: INSERT | TABLE: movies
+  | ID: 4    | DETAILS: {"title": "Exp1_Movie_..."}
+\end{lstlisting}
+
+The \texttt{log\_info()} function provides additional experiment progress messages to \texttt{crud.log}, which are displayed in the web dashboard's live terminal panel.
+
+\subsection{Logger Fallback}
+If the database log write fails (for example, due to connection issues), the logger falls back to writing directly to the \texttt{crud.log} file so that we do not lose any logs.
+
+% ===========================================================================
+% SECTION 5: CRUD OPERATIONS
+% ===========================================================================
+\section{Database Operations (CRUD)}
+
+The \texttt{leader\_operations.py} module implements the full suite of INSERT, UPDATE, and DELETE operations required by the project, with integrated logging for every operation.
+
+\subsection{Implemented Operations}
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{p{3.8cm} l l p{4cm}}
+\toprule
+\textbf{Function} & \textbf{Op} & \textbf{Table} & \textbf{Key Behavior} \\
+\midrule
+\texttt{add\_movie()} & INSERT & movies & Returns new movie ID \\
+\texttt{update\_movie()} & UPDATE & movies & Increments version \\
+\texttt{delete\_movie()} & DELETE & movies & Logs before deletion \\
+\texttt{add\_showtime()} & INSERT & showtimes & Links movie + hall \\
+\texttt{create\_reservation()} & INSERT & reservations & Checks availability \\
+\texttt{update\_reservation()} & UPDATE & reservations & Increments version \\
+\texttt{cancel\_reservation()} & UPDATE & reservations & Sets status cancelled \\
+\texttt{delete\_reservation()} & DELETE & reservations & Logs before deletion \\
+\bottomrule
+\end{tabular}
+\caption{CRUD operations implemented in \texttt{leader\_operations.py}}
+\end{table}
+
+Every function follows the same pattern: execute SQL $\rightarrow$ call \texttt{log\_operation()} $\rightarrow$ print confirmation. The interactive test block in \texttt{\_\_main\_\_} demonstrates the full INSERT $\rightarrow$ UPDATE $\rightarrow$ DELETE lifecycle with step-by-step user confirmation.
+
+% ===========================================================================
+% SECTION 6: EXPERIMENT 1
+% ===========================================================================
+\section{Experiment 1: Eventual Consistency}
+
+\subsection{Goal}
+To check if writes to the Leader reach the Follower and measure the exact replication lag between the write commit and its visibility on the replica.
+
+\subsection{Implementation Method}
+\texttt{experiment\_eventual.py} inserts a movie record into the Leader, capturing the write timestamp. It then polls the Follower at 1\,ms intervals (max 15\,s timeout) until the record becomes visible, calculating the replication lag as:
+$$\text{lag\_ms} = (T_{\text{visible}} - T_{\text{write}}) \times 1000$$
+The full implementation is provided in \textbf{Appendix B}.
+
+\subsection{Results \& Observations}
+The experiment was run in two different settings:
+\begin{itemize}
+    \item \textbf{Scenario A (Isolated CLI Execution):} Under minimal background system load, the replication lag was extremely low and stable:
+    \begin{itemize}
+        \item \textbf{Minimum Lag:} 1.25\,ms, \textbf{Maximum Lag:} 4.80\,ms, \textbf{Average Lag:} 2.50\,ms.
+    \end{itemize}
+    \item \textbf{Scenario B (Web Dashboard Execution):} When triggering from the web dashboard, the measured lag increased to \textbf{20--40\,ms}. This lag difference is due to:
+    \begin{enumerate}
+        \item \textbf{Connection overhead:} Each iteration opens and closes new database connections, adding TCP handshake and authentication latency (15--30\,ms on Azure).
+        \item \textbf{OS thread scheduling (sleep jitter):} Python's \texttt{time.sleep(0.001)} wakes late due to CPU context switching.
+        \item \textbf{GIL contention:} Flask request handler threads compete with the experiment's polling thread.
+    \end{enumerate}
+\end{itemize}
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=\linewidth]{eventual_lag_plot.png}
+    \caption{Experiment 1: Eventual Consistency --- Replication Lag across Iterations}
+    \label{fig:eventual_lag_plot}
+\end{figure}
+
+\newpage
+
+% ===========================================================================
+% SECTION 7: EXPERIMENT 2
+% ===========================================================================
+\section{Experiment 2: Monotonic Reads}
+
+\subsection{Goal}
+To show that reading from only the Follower prevents version rollbacks, while reading from the Leader and then immediately from the Follower can return stale data (causing a version rollback).
+
+\subsection{Implementation Method}
+\texttt{experiment\_monotonic.py} creates a reservation on the Leader and launches a background writer thread that performs \textbf{10 sequential updates} (\texttt{version} 2 through 11) at 150\,ms intervals. Concurrently, the main thread performs:
+\begin{itemize}
+    \item \textbf{Test A (Single Node):} Reads only from the Follower. Violation if $v_n < v_{n-1}$.
+    \item \textbf{Test B (Cross-Node):} Reads from the Leader, then immediately from the Follower. Violation if $v_{\text{follower}} < v_{\text{leader}}$.
+\end{itemize}
+The full implementation is provided in \textbf{Appendix C}.
+
+\subsection{Results \& Observations}
+\begin{itemize}
+    \item \textbf{Test A (Single Node --- Follower Only):} \textbf{0 stale reads.} The replica applies updates in the exact commit order, so the version never goes backward when reading from a single node.
+    \item \textbf{Test B (Cross-Node --- Leader $\rightarrow$ Follower):} \textbf{7 stale reads occurred.} After reading a newer version from the Leader, the Follower returned an older version because of replication lag, making the client go backward in time (e.g., v4 $\rightarrow$ v3).
+\end{itemize}
+
+The Follower VM's \texttt{Live Monotonic Reads Checker} terminal output shows the exact violation points:
+
+\begin{lstlisting}[caption=Follower VM Live Monotonic Reads Checker Output, basicstyle=\ttfamily\scriptsize]
+Time         | Leader Ver | Follower Ver | Status
+----------------------------------------------------------
+16:03:58.727 | v1         | v1           | NORMAL (In Sync)
+16:04:00.107 | v2         | v2           | NORMAL (In Sync)
+16:04:00.283 | v3         | v3           | NORMAL (In Sync)
+16:04:00.497 | v4         | v3           | VIOLATION #1
+16:04:00.502 | v4         | v4           | NORMAL (In Sync)
+16:04:00.672 | v5         | v5           | NORMAL (In Sync)
+16:04:00.837 | v6         | v5           | VIOLATION #2
+16:04:00.842 | v6         | v6           | NORMAL (In Sync)
+16:04:01.013 | v7         | v6           | VIOLATION #3
+16:04:01.018 | v7         | v7           | NORMAL (In Sync)
+16:04:01.179 | v8         | v7           | VIOLATION #4
+16:04:01.184 | v8         | v8           | NORMAL (In Sync)
+16:04:01.355 | v9         | v8           | VIOLATION #5
+16:04:01.360 | v9         | v9           | NORMAL (In Sync)
+16:04:01.530 | v10        | v10          | NORMAL (In Sync)
+16:04:01.731 | v11        | v10          | VIOLATION #6
+16:04:01.736 | v11        | v10          | VIOLATION #7
+16:04:01.742 | v11        | v11          | NORMAL (In Sync)
+\end{lstlisting}
+
+\subsection{Replication Lag Timing Analysis}
+Detailed timestamp inspection reveals the streaming replication delay:
+\begin{itemize}
+    \item \textbf{Lag Window for v4 ($<$5\,ms):} The first stale read (Violation \#1) at \texttt{16:04:00.497} (stale v3) resolved at \texttt{16:04:00.502} (5\,ms later). Replication delay was between 1\,ms and 5\,ms.
+    \item \textbf{Lag Window for v11 (5--11\,ms):} Stale reads \#6 and \#7 at \texttt{.731} and \texttt{.736} (both stale v10) synced at \texttt{.742}. The Follower remained stale across two consecutive 5\,ms polls, showing a lag of 5--11\,ms.
+\end{itemize}
+
+\newpage
+
+% ===========================================================================
+% SECTION 8: EXPERIMENT 3
+% ===========================================================================
+\section{Experiment 3: Read-After-Write (RAW) Consistency}
+
+\subsection{Goal}
+To check if a user can immediately read back their own write on the Leader, and measure the replication delay before that write is visible on the Follower.
+
+\subsection{Implementation Method}
+\texttt{experiment\_read\_after\_write.py} creates ticket reservations on the Leader and immediately checks visibility on both nodes \textbf{in parallel} using two threads (one for Leader, one for Follower). If the Follower does not show the record on the first read, a violation is recorded and the Follower is polled at 0.5\,ms intervals until the record appears. Persistent database connections are used to eliminate TCP handshake overhead from timing measurements. The full implementation is provided in \textbf{Appendix D}.
+
+\subsection{Results \& Observations}
+\begin{itemize}
+    \item \textbf{Leader Visibility Lag:} 0.71--2.44\,ms. The Leader always reflected the write instantly: \textbf{0 lag issues} (instant read-back from the primary).
+    \item \textbf{Follower Visibility Lag:} 2.74--4.17\,ms, resulting in an \textbf{80\% failure rate} (4 out of 5 runs) where the Follower missed the write on the first immediate read.
+    \item \textbf{Average Follower Visibility Lag:} 3.30\,ms.
+\end{itemize}
+
+\paragraph{Why Experiment 3 has lower lag than Experiment 1:}
+While Experiment 1 measured 20--40\,ms lag from the dashboard, Experiment 3 maintained $\sim$3.30\,ms under the same conditions. This is explained by:
+\begin{enumerate}
+    \item \textbf{Persistent connections:} Experiment 3 reuses pre-established connections, eliminating 15--30\,ms TCP/auth overhead per iteration.
+    \item \textbf{Parallel threaded checks:} Leader and Follower are queried concurrently, bypassing sequential scheduling delays.
+\end{enumerate}
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=\linewidth]{read_after_write_plot.png}
+    \caption{Experiment 3: Read-After-Write Consistency --- Leader vs Follower Visibility Lag (Logarithmic Scale)}
+    \label{fig:read_after_write_plot}
+\end{figure}
+
+\newpage
+
+% ===========================================================================
+% SECTION 9: EXPERIMENT 4
+% ===========================================================================
+\section{Experiment 4: Concurrent Writes \& Race Condition}
+
+\subsection{Goal}
+To test if concurrent writes to the Leader keep their exact commit order on the Follower. Also, to show how application-level checks without database locks lead to double booking race conditions.
+
+\subsection{Implementation Method}
+The experiment has two parts:
+\begin{enumerate}
+    \item \textbf{Part 1 --- Global Ordering (10 Parallel Threads):} Ten concurrent client threads are held at a synchronization barrier (\texttt{threading.Barrier(10)}). Once released simultaneously, each thread reserves a unique seat on the Leader. After a 3-second replication wait, both Leader and Follower are queried (\texttt{ORDER BY id ASC}) and the row sequences are compared.
+    \item \textbf{Part 2 --- Race Condition (Seat B5 Double Booking):} Two parallel threads concurrently check the availability of Seat B5 (ID: 10) and, if empty, attempt to reserve it (SELECT-then-INSERT pattern). A 50\,ms artificial delay between the check and write exposes the race condition window.
+\end{enumerate}
+The full implementation is provided in \textbf{Appendix E}.
+
+\subsection{Results \& Observations}
+
+The terminal outputs from the execution on the Leader and Follower nodes were recorded as follows.
+
+\subsubsection{Part 1: Global Ordering Verification}
+The Leader database committed the 10 concurrent writes and assigned unique auto-increment IDs. Upon querying the Follower VM using the \texttt{Analyze Concurrent Writes} monitor, the replicated sequence was checked:
+\begin{itemize}
+    \item \textbf{Leader Commit Sequence:} ID:34 $\rightarrow$ ID:35 $\rightarrow$ ID:36 $\rightarrow$ ID:37 $\rightarrow$ ID:38 $\rightarrow$ ID:39 $\rightarrow$ ID:40 $\rightarrow$ ID:41 $\rightarrow$ ID:42 $\rightarrow$ ID:43.
+    \item \textbf{Follower Replication Sequence:} ID:34 $\rightarrow$ ID:35 $\rightarrow$ ID:36 $\rightarrow$ ID:37 $\rightarrow$ ID:38 $\rightarrow$ ID:39 $\rightarrow$ ID:40 $\rightarrow$ ID:41 $\rightarrow$ ID:42 $\rightarrow$ ID:43.
+\end{itemize}
+The sequence of IDs, seats, and customer names was \textbf{100\% identical} on both nodes. This verifies that PostgreSQL's physical streaming replication preserves \textbf{Global Ordering} (first-in-first-out WAL replay stream), and no out-of-order replication occurs.
+
+\subsubsection{Analysis of Sequence ID vs. Timestamp Jitter}
+A notable detail in the Leader and Follower logs is that while the rows are strictly ordered by their auto-incrementing primary key (\texttt{id}), the client-side Python timestamps (\texttt{last\_updated}) appear slightly out of order. For example:
+\begin{itemize}
+    \item \texttt{ID: 35} (Seat: C5, Concurrent\_Cust\_3) committed with Python timestamp \texttt{16:31:16.474}.
+    \item \texttt{ID: 37} (Seat: D2, Concurrent\_Cust\_5) committed with Python timestamp \texttt{16:31:16.473}.
+\end{itemize}
+This minor discrepancy occurs because the thread timestamps are captured by Python on the client-side before executing the SQL INSERT query. Due to OS thread scheduling jitter and database transaction serialization, the database engine processed and assigned the sequence ID to \texttt{Concurrent\_Cust\_3} before \texttt{Concurrent\_Cust\_5}, even though the latter thread recorded its local timestamp a few milliseconds earlier. Since replication follows the commit order (WAL stream), the Follower replays them in the exact same ID sequence.
+
+\subsubsection{Part 2: Double Booking Race Condition}
+In the conflict test, both client threads executed simultaneously:
+\begin{itemize}
+    \item \textbf{Racer \#1:} Commits successfully at \texttt{16:31:16.644} (Res ID: 44).
+    \item \textbf{Racer \#2:} Commits successfully at \texttt{16:31:16.643} (Res ID: 45).
+\end{itemize}
+Both threads read the database state concurrently, saw Seat B5 as empty, and successfully committed their insertions. The Follower monitor logged a double booking anomaly on Seat B5 (ID: 10) with two distinct reservation records.
+
+This shows that while replication preserves transaction order, Single-Leader Replication does not protect the application from transactional race conditions. If clients query a lagged follower, eventual consistency increases the likelihood of read-skew, leading to write conflicts on the leader. To secure transactional consistency, database row locks (\texttt{SELECT FOR UPDATE}), serializable isolation levels, or database unique constraints are required.
+
+The interactive console output from the Follower's monitoring tool captures both the global ordering preservation and the double booking event:
+
+\begin{lstlisting}[caption=Follower VM Concurrent Writes and Double Booking Analyzer Output, basicstyle=\ttfamily\scriptsize]
+==========================================================================================
+  CONCURRENT WRITES & DOUBLE BOOKING ANALYZER (FOLLOWER STATE)
+  Reading reservations table on Follower...
+==========================================================================================
+
+  PART 1: REPLICATION ORDER ON FOLLOWER (RESERVATIONS TABLE)
+  --------------------------------------------------------------------------------
+  Order | Res ID   | Seat   | Customer Name          | Replication Time
+  --------------------------------------------------------------------------------
+  #1    | ID:34    | C3     | Concurrent_Cust_1      | 16:31:16.471
+  #2    | ID:35    | C5     | Concurrent_Cust_3      | 16:31:16.474
+  #3    | ID:36    | B2     | Concurrent_Cust_2      | 16:31:16.472
+  #4    | ID:37    | D2     | Concurrent_Cust_5      | 16:31:16.473
+  #5    | ID:38    | D1     | Concurrent_Cust_4      | 16:31:16.475
+  #6    | ID:39    | B1     | Concurrent_Cust_9      | 16:31:16.478
+  #7    | ID:40    | E2     | Concurrent_Cust_10     | 16:31:16.476
+  #8    | ID:41    | E1     | Concurrent_Cust_8      | 16:31:16.479
+  #9    | ID:42    | C2     | Concurrent_Cust_7      | 16:31:16.480
+  #10   | ID:43    | D3     | Concurrent_Cust_6      | 16:31:16.482
+  --------------------------------------------------------------------------------
+
+  PART 2: DOUBLE BOOKING CHECK (Race Condition on Seat B5)
+  ------------------------------------------------------------------------------------------
+  DOUBLE BOOKING DETECTED ON FOLLOWER!
+  ---------------------------------------------------------------------------------
+  Record #1  -> Seat: B5 | Res.ID: 44   | Customer: Racer_Client_1       | Time: 2026-06-08 16:31:16.644000
+  Record #2  -> Seat: B5 | Res.ID: 45   | Customer: Racer_Client_2       | Time: 2026-06-08 16:31:16.643000
+  ---------------------------------------------------------------------------------
+
+==========================================================================================
+\end{lstlisting}
+
+% ===========================================================================
+% SECTION 10: MONITORING TOOLS
+% ===========================================================================
+\section{Monitoring and Dashboard Tools}
+
+\subsection{Web Dashboard (Leader)}
+\texttt{dashboard.py} provides a Flask-based web interface at \texttt{http://10.0.0.4:5000} with:
+\begin{itemize}
+    \item One-click experiment execution with real-time progress via \texttt{crud.log} streaming.
+    \item Live database state viewer showing all six tables.
+    \item Automatic chart generation and display after each experiment run.
+    \item Full table inspection with row-level detail modals.
+\end{itemize}
+
+\subsection{Follower Monitor (Follower)}
+\texttt{follower\_monitor.py} is an interactive CLI tool on the Follower VM with five experiment-specific companion modes:
+\begin{enumerate}
+    \item \textbf{Live Replication Log Watcher} --- streams new \texttt{replication\_log} entries in real time (Experiment 1 companion).
+    \item \textbf{Live Monotonic Reads Checker} --- polls Leader and Follower versions at 5\,ms intervals, flagging stale reads (Experiment 2 companion).
+    \item \textbf{Live Read-After-Write Monitor} --- tracks reservation visibility on the Follower in real time (Experiment 3 companion).
+    \item \textbf{Concurrent Writes Analyzer} --- displays replicated row ordering and double booking evidence (Experiment 4, post-run).
+    \item \textbf{Quick DB Overview} --- compares row counts and latest records across Leader and Follower for sync verification.
+\end{enumerate}
+
+% ===========================================================================
+% SECTION 11: CONCLUSION
+% ===========================================================================
+\section{Conclusion}
+The four experiments successfully demonstrate the characteristics of single-leader replication:
+\begin{enumerate}
+    \item \textbf{Eventual Consistency} guarantees that replica nodes eventually converge to the primary, but lag varies based on system load, connection management, and OS scheduling.
+    \item \textbf{Monotonic Reads} are preserved when client sessions are pinned to a single replica, but multi-node routing results in rollback anomalies unless session-sticky routing is enforced.
+    \item \textbf{Read-After-Write Consistency} is guaranteed on the Leader but violated on the Follower immediately after commits, requiring write-redirection or session tracking to ensure users always see their own modifications.
+    \item \textbf{Concurrent Writes \& Global Ordering:} Physical streaming replication preserves sequential commit order (global ordering). However, application-level concurrent requests without proper database locking or constraints still lead to race conditions (double bookings).
+\end{enumerate}
+
+\newpage
+
+% ===========================================================================
+% APPENDICES
+% ===========================================================================
+\appendix
+
+% ---------------------------------------------------------------------------
+% APPENDIX A: FULL SCHEMA
+% ---------------------------------------------------------------------------
+\section{Appendix A: Complete Database Schema}
+
+\begin{lstlisting}[language=SQL, caption=Complete PostgreSQL Schema DDL (cinema\_schema.sql)]
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+-- Table 1: Movies
+CREATE TABLE movies (
+    id           SERIAL PRIMARY KEY,
+    title        VARCHAR(255) NOT NULL,
+    genre        VARCHAR(100) NOT NULL,
+    duration_min INTEGER NOT NULL,
+    version      INTEGER DEFAULT 1,
+    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    operation_id UUID DEFAULT uuid_generate_v4()
+);
+
+-- Table 2: Halls
+CREATE TABLE halls (
+    id           SERIAL PRIMARY KEY,
+    name         VARCHAR(100) NOT NULL,
+    capacity     INTEGER NOT NULL,
+    version      INTEGER DEFAULT 1,
+    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    operation_id UUID DEFAULT uuid_generate_v4()
+);
+
+-- Table 3: Seats
+CREATE TABLE seats (
+    id           SERIAL PRIMARY KEY,
+    hall_id      INTEGER NOT NULL REFERENCES halls(id) ON DELETE CASCADE,
+    row_label    CHAR(1) NOT NULL,
+    seat_number  INTEGER NOT NULL,
+    version      INTEGER DEFAULT 1,
+    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    operation_id UUID DEFAULT uuid_generate_v4(),
+    UNIQUE(hall_id, row_label, seat_number)
+);
+
+-- Table 4: Showtimes
+CREATE TABLE showtimes (
+    id           SERIAL PRIMARY KEY,
+    movie_id     INTEGER NOT NULL REFERENCES movies(id) ON DELETE CASCADE,
+    hall_id      INTEGER NOT NULL REFERENCES halls(id) ON DELETE CASCADE,
+    show_date    DATE NOT NULL,
+    show_time    TIME NOT NULL,
+    version      INTEGER DEFAULT 1,
+    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    operation_id UUID DEFAULT uuid_generate_v4()
+);
+
+-- Table 5: Reservations
+CREATE TABLE reservations (
+    id            SERIAL PRIMARY KEY,
+    showtime_id   INTEGER NOT NULL REFERENCES showtimes(id) ON DELETE CASCADE,
+    seat_id       INTEGER NOT NULL REFERENCES seats(id) ON DELETE CASCADE,
+    customer_name VARCHAR(255) NOT NULL,
+    status        VARCHAR(20) DEFAULT 'reserved' 
+                  CHECK (status IN ('reserved', 'cancelled')),
+    version       INTEGER DEFAULT 1,
+    last_updated  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    operation_id  UUID DEFAULT uuid_generate_v4()
+);
+
+-- Table 6: Replication Log
+CREATE TABLE replication_log (
+    log_id         SERIAL PRIMARY KEY,
+    operation_type VARCHAR(10) NOT NULL 
+                   CHECK (operation_type IN ('INSERT', 'UPDATE', 'DELETE')),
+    table_name     VARCHAR(50) NOT NULL,
+    record_id      INTEGER NOT NULL,
+    details        JSONB DEFAULT '{}',
+    timestamp      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    node           VARCHAR(20) NOT NULL DEFAULT 'Leader'
+);
+
+-- Performance Indexes
+CREATE INDEX idx_seats_hall ON seats(hall_id);
+CREATE INDEX idx_showtimes_movie ON showtimes(movie_id);
+CREATE INDEX idx_showtimes_hall ON showtimes(hall_id);
+CREATE INDEX idx_reservations_showtime ON reservations(showtime_id);
+CREATE INDEX idx_reservations_seat ON reservations(seat_id);
+CREATE INDEX idx_replication_log_timestamp ON replication_log(timestamp);
+CREATE INDEX idx_replication_log_table ON replication_log(table_name);
+\end{lstlisting}
+
+\newpage
+
+% ---------------------------------------------------------------------------
+% APPENDIX B: EXPERIMENT 1 CODE
+% ---------------------------------------------------------------------------
+\section{Appendix B: Python Code for Experiment 1}
+
+\begin{lstlisting}[language=Python, caption=Experiment 1: Lag Measurement Polling Loop (experiment\_eventual.py)]
+# Write to Leader
+t_write_start = datetime.now()
+query_insert = """
+    INSERT INTO movies (title, genre, duration_min, version, last_updated, operation_id) 
+    VALUES (%s, %s, %s, 1, %s, %s) RETURNING id;
+"""
+cur_l.execute(query_insert, (movie_title, genre, duration, t_write_start, operation_id))
+conn_l.commit()
+record_id = cur_l.fetchone()[0]
+
+# Poll Follower database
+t_poll_start = time.time()
+query_select = "SELECT last_updated FROM movies WHERE id = %s;"
+while time.time() - t_poll_start < 15:  # 15-second timeout
+    attempts += 1
+    cur_f.execute(query_select, (record_id,))
+    row = cur_f.fetchone()
+    if row:
+        t_visible = datetime.now()
+        break
+    time.sleep(0.001)  # 1ms polling interval
+
+lag_ms = (t_visible - t_write_start).total_seconds() * 1000.0
+\end{lstlisting}
+
+\newpage
+
+% ---------------------------------------------------------------------------
+% APPENDIX C: EXPERIMENT 2 CODE
+% ---------------------------------------------------------------------------
+\section{Appendix C: Python Code for Experiment 2}
+
+\begin{lstlisting}[language=Python, caption=Experiment 2: Monotonic Updates and Checks (experiment\_monotonic.py)]
+# Background writer: Performs 10 sequential updates on Leader
+def writer_thread():
+    conn = psycopg2.connect(**LEADER_DB)
+    cur = conn.cursor()
+    for version in range(2, 12):  # 10 updates: v2 through v11
+        ts = datetime.now()
+        op_id = str(uuid.uuid4())
+        cur.execute("""
+            UPDATE reservations 
+            SET customer_name = %s, version = %s, last_updated = %s, operation_id = %s 
+            WHERE id = %s;""", 
+            (f"Client V{version}", version, ts, op_id, res_id))
+        conn.commit()
+        time.sleep(0.15)  # 150ms write interval
+    cur.close()
+    conn.close()
+    stop_event.set()
+
+# Main thread reader loop
+while not stop_event.is_set() or read_count < 100:
+    read_count += 1
+    
+    # Test A: Read only from Follower (Single Node)
+    cur_f.execute("SELECT version FROM reservations WHERE id = %s;", (res_id,))
+    f_version = cur_f.fetchone()[0]
+    violation_follower = "VIOLATION" if f_version < last_seen_follower_version else "NORMAL"
+    last_seen_follower_version = max(last_seen_follower_version, f_version)
+    
+    # Test B: Cross-Node Read (Leader then Follower)
+    cur_l_read.execute("SELECT version FROM reservations WHERE id = %s;", (res_id,))
+    l_version = cur_l_read.fetchone()[0]
+    
+    cur_f.execute("SELECT version FROM reservations WHERE id = %s;", (res_id,))
+    f_immediate_version = cur_f.fetchone()[0]
+    violation_cross = "VIOLATION" if f_immediate_version < l_version else "NORMAL"
+    
+    time.sleep(0.01)  # 10ms read polling
+\end{lstlisting}
+
+\newpage
+
+% ---------------------------------------------------------------------------
+% APPENDIX D: EXPERIMENT 3 CODE
+% ---------------------------------------------------------------------------
+\section{Appendix D: Python Code for Experiment 3}
+
+\begin{lstlisting}[language=Python, caption=Experiment 3: Parallel Read-After-Write Checkers (experiment\_read\_after\_write.py)]
+# Write a reservation to the Leader (using persistent connection)
+cur_l_write.execute(query_insert, (showtime_id, seat_id, customer_name, t_write, op_id))
+res_id = cur_l_write.fetchone()[0]
+conn_l_write.commit()
+t_commit = datetime.now()
+
+# Leader visibility check thread
+def check_leader_visibility():
+    cur_l_check.execute("SELECT customer_name FROM reservations WHERE id = %s;", 
+                        (res_id,))
+    row_l = cur_l_check.fetchone()
+    t_end = datetime.now()
+    leader_res['visible'] = (row_l is not None)
+    leader_res['lag_ms'] = (t_end - t_commit).total_seconds() * 1000.0
+
+# Follower visibility check thread
+def check_follower_visibility():
+    cur_f_check.execute("SELECT customer_name FROM reservations WHERE id = %s;", 
+                        (res_id,))
+    row_f_first = cur_f_check.fetchone()
+    first_visible = (row_f_first is not None)
+    
+    attempts = 1
+    t_poll_start = time.time()
+    visible_time = None
+    
+    if first_visible:
+        visible_time = datetime.now()
+    else:
+        while time.time() - t_poll_start < 10:
+            attempts += 1
+            cur_f_check.execute("SELECT customer_name FROM reservations WHERE id = %s;", 
+                                (res_id,))
+            if cur_f_check.fetchone():
+                visible_time = datetime.now()
+                break
+            time.sleep(0.0005)  # 0.5ms high-frequency polling
+            
+    follower_res['first_visible'] = first_visible
+    follower_res['lag_ms'] = (visible_time - t_commit).total_seconds() * 1000.0 \
+                             if visible_time else -1.0
+
+# Start checks in parallel threads
+t1 = threading.Thread(target=check_leader_visibility)
+t2 = threading.Thread(target=check_follower_visibility)
+t1.start(); t2.start()
+t1.join();  t2.join()
+\end{lstlisting}
+
+\newpage
+
+% ---------------------------------------------------------------------------
+% APPENDIX E: EXPERIMENT 4 CODE
+% ---------------------------------------------------------------------------
+\section{Appendix E: Python Code for Experiment 4}
+
+\begin{lstlisting}[language=Python, caption=Experiment 4: Concurrent Writes \& Racer Threads (experiment\_concurrent.py)]
+# Part 1: Barrier and 10 Concurrent Workers
+barrier = threading.Barrier(10)  # Hold all 10 threads
+
+def reservation_worker(thread_idx, seat_id):
+    customer = f"Concurrent_Cust_{thread_idx}"
+    op_id = str(uuid.uuid4())
+    barrier.wait()  # Released simultaneously
+    conn = psycopg2.connect(**LEADER_DB)
+    cur = conn.cursor()
+    t_commit = datetime.now()
+    cur.execute(query_insert, (showtime_id, seat_id, customer, t_commit, op_id))
+    res_id = cur.fetchone()[0]
+    conn.commit()
+    cur.close()
+    conn.close()
+
+# After all threads complete: wait 3s for replication, then compare
+time.sleep(3)
+# Query Leader: ORDER BY id ASC
+# Query Follower: ORDER BY id ASC
+# Compare row-by-row: MATCH or OUT-OF-ORDER
+
+# Part 2: Race Condition Double Booking
+race_barrier = threading.Barrier(2)
+
+def booking_racer(racer_id):
+    customer = f"Racer_Client_{racer_id}"
+    race_barrier.wait()  # Released simultaneously
+    t_start = datetime.now()
+    conn = psycopg2.connect(**LEADER_DB)
+    cur = conn.cursor()
+    # Application-level conflict check (SELECT-then-INSERT)
+    cur.execute("SELECT id FROM reservations "
+                "WHERE showtime_id=1 AND seat_id=10 AND status='reserved';")
+    existing = cur.fetchone()
+    time.sleep(0.05)  # 50ms race condition window
+    if existing is None:
+        cur.execute("INSERT INTO reservations "
+                    "(showtime_id, seat_id, customer_name, status, last_updated) "
+                    "VALUES (1, 10, %s, 'reserved', %s) RETURNING id;", 
+                    (customer, t_start))
+        conn.commit()
+    cur.close()
+    conn.close()
+\end{lstlisting}
+
+\end{document}

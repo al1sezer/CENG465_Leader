@@ -1,213 +1,139 @@
 \documentclass[aspectratio=169]{beamer}
-\usetheme{Madrid} % Academic and clean theme
+\usetheme{Madrid}
 \usecolortheme{default}
 
 \usepackage[utf8]{inputenc}
-\usepackage[T1]{fontenc}
-\usepackage[english]{babel} % Updated to English
 \usepackage{graphicx}
-\usepackage{listings}
+\usepackage{booktabs}
 \usepackage{xcolor}
 
-% Style settings for code blocks
-\lstset{
-    basicstyle=\ttfamily\footnotesize,
-    backgroundcolor=\color{gray!10},
-    frame=single,
-    breaklines=true,
-    keywordstyle=\color{blue},
-    stringstyle=\color{red}
-}
+\definecolor{darkgreen}{rgb}{0,0.5,0}
 
-% TEXT INSIDE SQUARE BRACKETS APPEARS IN THE FOOTER
-\title[Single-Leader Replication]{Single-Leader Replication in a Cloud-Based Distributed System}
-\subtitle{CENG 465 Project Progress Presentation}
-\author[Ali Ekin Özçetin \& Ali Sezer Uysal]{Ali Ekin Özçetin \and Ali Sezer Uysal}
-\institute[CENG 465]{CENG 465 - Principles of Data-Intensive Systems}
-\date{May 5, 2026}
+\title[CENG 465 - Data Replication]{Data Replication in a Single-Leader Environment}
+\subtitle{CENG 465 Final Project}
+\author[Özçetin \& Uysal]{
+    \textbf{Ali Ekin Özçetin} — 290201047 \\
+    \textbf{Ali Sezer Uysal} — 290201046 \\[5pt]
+    \textbf{Group 10 (G10)}
+}
+\institute[IZTECH]{Izmir Institute of Technology \\ Computer Engineering Department}
+\date{June 8, 2026}
 
 \begin{document}
 
-% --- SLIDE 1: TITLE ---
-% Presenter: Leader
 \begin{frame}
     \titlepage
 \end{frame}
 
-% --- SLIDE 2: CLOUD ARCHITECTURE ---
-% Presenter: Leader
-\begin{frame}{Cloud Architecture and Infrastructure Setup}
+\begin{frame}{System Architecture \& Demo Setup}
+    \textbf{Distributed Environment on Microsoft Azure}
     \begin{itemize}
-        \item To simulate real-world network latency, two separate virtual machines (VMs) were deployed on Azure.
-        \item The system is not confined to a local network or a single Docker environment (Distributed Environment Requirement fulfilled).
+        \item \textbf{Leader Node (10.0.0.4):} Read-Write. \textbf{Demo Tool:} Flask Web Dashboard to run tests.
+        \item \textbf{Follower Node (10.0.0.5):} Read-Only replica. \textbf{Demo Tool:} Interactive CLI Monitor for live logs.
+        \item \textbf{Setup:} PostgreSQL 16 Asynchronous Streaming Replication (via WAL).
     \end{itemize}
     \vspace{0.3cm}
+    \textbf{How Schema Fields Help Us Track Replication:}
+    \begin{enumerate}
+        \item \textbf{version:} Increments on UPDATE (Shows version rollbacks during stale reads).
+        \item \textbf{last\_updated:} Microsecond timestamp (Used for lag timing).
+        \item \textbf{operation\_id:} UUID v4 (Links writes between Leader and Follower).
+    \end{enumerate}
+\end{frame}
+
+\begin{frame}{Exp 1: Eventual Consistency \& Latency}
+    \textbf{Goal:} Measure replication lag.
+    \begin{itemize}
+        \item \textbf{Test A (CLI Script):} Average lag was only $\sim$ \textbf{2.50 ms}. Shows raw database speed.
+        \item \textbf{Test B (Web Dashboard):} Average lag jumped to \textbf{20 ms - 40 ms}.
+    \end{itemize}
+    \vspace{0.2cm}
+    \textbf{Why the latency gap in the web dashboard?} 
+    \begin{itemize}
+        \item Connection overhead: Opening/closing TCP database connections.
+        \item OS Thread Jitter: Python's \texttt{time.sleep(0.001)} waking up late.
+        \item Python GIL contention between web request and polling threads.
+    \end{itemize}
+\end{frame}
+
+\begin{frame}{Exp 1: Replication Lag Chart}
     \begin{center}
-        \includegraphics[width=0.8\linewidth, height=0.5\textheight, keepaspectratio]{slayt2.png}
+        \includegraphics[height=0.68\textheight]{eventual_lag_plot.png}
+        
+        \small \textit{Key Takeaway: Dashboard adds Azure TCP and connection overhead, while CLI shows pure DB speed.}
     \end{center}
 \end{frame}
 
-% --- SLIDE 3: DATABASE SCHEMA ---
-% Presenter: Leader
-\begin{frame}[fragile]{Database Schema and Version Control}
+\begin{frame}{Exp 2: Monotonic Reads}
+    \textbf{Goal:} Test for stale reads (version rollbacks) when hitting different nodes.
     \begin{itemize}
-        \item Specific tracking fields were added to the schema to monitor data updates.
-        \item \texttt{version}, \texttt{last\_updated}, and \texttt{operation\_id} are maintained for each record.
+        \item \textbf{Test A (Follower Only):} Reading only from Follower $\rightarrow$ \textbf{0 stale reads}. Since updates apply sequentially, versions never go backward.
+        \item \textbf{Test B (Leader then Follower):} Read latest from Leader, then read from Follower $\rightarrow$ \textbf{7 stale reads caught} during rapid writes.
     \end{itemize}
-    
-    \begin{lstlisting}[language=SQL, caption=Update Operation Snippet]
-UPDATE data 
-SET value = %s, version = version + 1, last_updated = %s, operation_id = %s 
-WHERE id = %s;
-    \end{lstlisting}
-
-    \begin{columns}
-        \begin{column}{0.48\textwidth}
-            \centering
-            \textbf{Data Table Schema} \\
-            \vspace{0.1cm}
-            \includegraphics[width=\linewidth, height=0.25\textheight, keepaspectratio]{data_table.png}
-        \end{column}
-        \begin{column}{0.48\textwidth}
-            \centering
-            \textbf{Replication Log Schema} \\
-            \vspace{0.1cm}
-            \includegraphics[width=\linewidth, height=0.25\textheight, keepaspectratio]{replication_log_table.png}
-        \end{column}
-    \end{columns}
-\end{frame}
-
-% --- SLIDE 4: REPLICATION LOGGING ---
-% Presenter: Leader
-\begin{frame}{Replication Logging}
+    \vspace{0.2cm}
+    \textbf{Timing Analysis from Logs (Measuring Replication Delay):}
     \begin{itemize}
-        \item \textbf{Millisecond Precision:} Logs are recorded with millisecond precision to accurately measure latency.
-        \item Every read/write operation is asynchronously written to the \texttt{crud.log} file.
+        \item \textbf{First Stale Read (v4):} Leader showed v4, Follower returned stale v3. Resolved 5ms later.
+        \item \textbf{Stale Reads at v11:} Follower returned v10 across two consecutive 5ms polls. Shows a lag of 5--11ms.
     \end{itemize}
-    \vspace{0.3cm}
-    \begin{center}
-        \includegraphics[width=0.7\linewidth, height=0.35\textheight, keepaspectratio]{crud_log.png}
-    \end{center}
 \end{frame}
 
-%% --- SLIDE 5: DATA OPERATIONS ---
-% Presenter: Follower
-\begin{frame}[fragile]{Data Operations (Leader Operations)}
-    \begin{columns}
-        \begin{column}{0.40\textwidth}
-            \begin{itemize}
-                \item Sequential \textbf{INSERT}, \textbf{UPDATE}, and \textbf{DELETE} operations are executed on the Leader.
-                \item The autonomous Python script pauses for user input, allowing for a controlled, step-by-step demonstration.
-                \item Batch inserts (\texttt{TestValue\_2}, \texttt{TestValue\_3}) showcase rapid replication.
-            \end{itemize}
-        \end{column}
-        \begin{column}{0.58\textwidth}
-            \begin{lstlisting}[language=Python, showstringspaces=false, showspaces=false, basicstyle=\ttfamily\scriptsize]
-new_id = insert_data("TestValue_1", "CENG1")
-input("INSERT 1 completed, press ENTER...")
-
-update_data(new_id, "CENG465")
-input("UPDATE completed, press ENTER...")
-
-delete_data(new_id)
-input("DELETE completed, press ENTER...")
-
-insert_data("TestValue_2", "CENG2")
-input("INSERT 2 completed, press ENTER...")
-
-insert_data("TestValue_3", "CENG3")
-print("INSERT 3 completed")
-            \end{lstlisting}
-        \end{column}
-    \end{columns}
-\end{frame}
-
-% --- SLIDE 6: EVIDENCE OF REPLICATION ---
-% Presenter: Follower
-\begin{frame}{Evidence of Replication}
-    \begin{columns}
-        \begin{column}{0.45\textwidth}
-            \centering
-            \textbf{Leader (Primary) Node} \\
-            \vspace{0.2cm}
-            \includegraphics[width=\linewidth, height=0.7\textheight, keepaspectratio]{leade_crud.png}
-        \end{column}
-        \begin{column}{0.45\textwidth}
-            \centering
-            \textbf{Follower (Secondary) Node} \\
-            \vspace{0.2cm}
-            \includegraphics[width=\linewidth, height=0.7\textheight, keepaspectratio]{slayt6_sag.png}
-        \end{column}
-    \end{columns}
+\begin{frame}{Exp 2: Live Demo Output (Terminal Log)}
+    \textbf{Live Check for Stale Reads}
+    \vspace{0.2cm}
+    \begin{table}[]
+        \centering
+        \small
+        \begin{tabular}{@{}llcl@{}}
+            \toprule
+            \textbf{Timestamp} & \textbf{Leader Version} & \textbf{Follower Version} & \textbf{Status} \\ \midrule
+            16:04:00.283 & v3 & v3 & \textcolor{darkgreen}{NORMAL (In Sync)} \\ 
+            16:04:00.497 & v4 & v3 & \textcolor{red}{\textbf{STALE READ \#1 (Version Went Back!)}} \\ 
+            16:04:00.502 & v4 & v4 & \textcolor{darkgreen}{NORMAL (In Sync)} \\ \midrule
+            16:04:00.672 & v5 & v5 & \textcolor{darkgreen}{NORMAL (In Sync)} \\ 
+            16:04:00.837 & v6 & v5 & \textcolor{red}{\textbf{STALE READ \#2 (Version Went Back!)}} \\ 
+            16:04:00.842 & v6 & v6 & \textcolor{darkgreen}{NORMAL (In Sync)} \\ \bottomrule
+        \end{tabular}
+    \end{table}
     \vspace{0.1cm}
-    \begin{center}
-        Physical data transfer (Streaming Replication) has been successfully established.
-    \end{center}
+    \small \textit{Note: Reading a new version from the Leader and then reading from the lagged Follower makes the client "travel back in time" (e.g. seeing v4, then immediately seeing v3).}
 \end{frame}
 
-% --- SLIDE 7: LIVE REPLICATION TEST (NEW) ---
-% Presenter: Follower
-\begin{frame}{Live Replication Test: Manual vs. Automated}
-    \begin{columns}
-        \begin{column}{0.48\textwidth}
-            \centering
-            \textbf{Data Table After CRUD} \\
-            \vspace{0.2cm}
-            \includegraphics[width=\linewidth, height=0.6\textheight, keepaspectratio]{data_table_after_crud.png}
-        \end{column}
-        \begin{column}{0.48\textwidth}
-            \centering
-            \textbf{Replication Log After CRUD} \\
-            \vspace{0.2cm}
-            \includegraphics[width=\linewidth, height=0.6\textheight, keepaspectratio]{replication_log_after_crud.png}
-        \end{column}
-    \end{columns}
-    \vspace{0.3cm}
-    \begin{center}
-        Real-time monitoring successfully captures \texttt{INSERT}, \texttt{UPDATE}, and \texttt{DELETE} events along with operation latencies.
-    \end{center}
-\end{frame}
-
-
-% --- SLIDE 8: LATENCY MEASUREMENT (Shifted from 7) ---
-% Presenter: Follower
-\begin{frame}{Visibility of Updates and Latency Measurement}
+\begin{frame}{Exp 3: Read-After-Write Consistency}
+    \textbf{Goal:} Make sure a user sees their own writes immediately.
     \begin{itemize}
-        \item The Follower actively monitors the \texttt{replication\_log} and accurately captures operation IDs generated by the Leader.
-        \item The measured network latency is explicitly calculated by comparing the generation time on the Leader and the precise reading time on the Follower node.
+        \item \textbf{Reading from Leader:} 100\% immediate visibility (0 lag issues). Reading back from the same node is instant.
+        \item \textbf{Reading from Follower:} 80\% of immediate Follower reads missed the write on the first try. Average lag: 3.30 ms.
+        \item \textbf{Takeaway:} Standby replicas cannot guarantee immediate visibility of your own writes without write-redirection or pinning the user session to the primary.
     \end{itemize}
-    \vspace{0.2cm}
+\end{frame}
+
+\begin{frame}{Exp 3: Lag Comparison Chart}
     \begin{center}
-        \includegraphics[width=0.7\linewidth, height=0.35\textheight, keepaspectratio]{slayt8.png}
+        \includegraphics[height=0.68\textheight]{read_after_write_plot.png}
+        
+        \small \textit{Key Takeaway: Persistent connections successfully bypassed Azure network latency, dropping lag to ~3.3ms.}
     \end{center}
 \end{frame}
 
-% --- SLIDE 9: READ-ONLY EVIDENCE (Shifted from 8) ---
-% Presenter: Follower
-\begin{frame}{Architectural Security: "Read-Only" Enforcement}
+\begin{frame}{Exp 4: Concurrent Writes \& Race Conditions}
+    \textbf{Goal:} Check write ordering and test for booking race conditions.
     \begin{itemize}
-        \item \textbf{Single-Leader Constraint:} To guarantee data integrity and eliminate split-brain issues, the Follower instance is constrained to operate strictly in Read-Only mode.
-        \item As demonstrated, direct data manipulation attempts (e.g., \texttt{DELETE}) on the Follower are explicitly blocked and strictly rejected by the PostgreSQL engine.
+        \item \textbf{Part 1 (Write Ordering):} 10 parallel threads run at the same time $\rightarrow$ \textbf{0 ordering issues}. The Follower replayed the WAL stream in the exact same order as Leader commits.
+        \item \textbf{Part 2 (Double Booking):} 2 parallel client threads try to book the same seat at the same time $\rightarrow$ \textbf{Both succeeded (Double Booking anomaly)}.
+        \item \textbf{Fix:} Needs database-level row locking (\texttt{SELECT FOR UPDATE}) or a \texttt{UNIQUE} index on the seat.
     \end{itemize}
-    \vspace{0.2cm}
-    \begin{center}
-        \includegraphics[width=0.7\linewidth, height=0.3\textheight, keepaspectratio]{slayt9.png}
-    \end{center}
 \end{frame}
 
-% --- SLIDE 10: CONCLUSION (Shifted from 9) ---
-% Presenter: Both
-\begin{frame}{Current Progress \& Conclusion}
+\begin{frame}{Conclusion}
     \begin{itemize}
-        \item Distributed environment setup utilizing distinct Azure VMs has been fully realized.
-        \item Database synchronization, coupled with meticulous schema design (\texttt{version}, \texttt{uuid}, \texttt{timestamp}), is operating smoothly.
-        \item A real-time listener script (\texttt{follower\_ops.py}) successfully catches Leader operations and calculates millisecond-accurate network latencies.
-        \item Read-only compliance on the Follower node has been rigorously tested and verified.
+        \item Distributed setups show the real impact of network and OS delay.
+        \item Asynchronous replication is fast but means readers can get stale data from followers.
+        \item \textbf{Key Takeaway:} Python connection overhead, GIL, and OS thread sleep jitter added more lag in our tests than the database replication itself.
     \end{itemize}
-    \vspace{1cm}
+    \vspace{0.5cm}
     \begin{center}
-        \Large \textbf{Thank You}\\
-        \normalsize Any Questions?
+        \textbf{Thank You! \\ Questions \& Live Demo}
     \end{center}
 \end{frame}
 

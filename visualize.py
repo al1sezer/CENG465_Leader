@@ -43,25 +43,45 @@ def plot_eventual_consistency():
     trials = [int(row[0]) for row in rows]
     lags = [float(row[6]) for row in rows]
     
-    plt.figure(figsize=(10, 5))
-    # Sleek harmonious color palette
-    bars = plt.bar(trials, lags, color='#4A90E2', edgecolor='#2171C7', alpha=0.85, width=0.6)
+    # Map colors based on operation type suffix in title (row[2])
+    bar_colors = []
+    for row in rows:
+        title = row[2]
+        if title.endswith('_INSERT'):
+            bar_colors.append('#E74C3C') # Red
+        elif title.endswith('_UPDATE'):
+            bar_colors.append('#2ECC71') # Green
+        elif title.endswith('_DELETE'):
+            bar_colors.append('#3498DB') # Blue
+        else:
+            bar_colors.append('#4A90E2') # Fallback blue
+            
+    plt.figure(figsize=(11, 5.5))
+    bars = plt.bar(trials, lags, color=bar_colors, edgecolor='#555555', alpha=0.85, width=0.6)
     
     # Write the values above the columns
     for bar in bars:
         height = bar.get_height()
-        plt.text(bar.get_x() + bar.get_width()/2.0, height + 0.05, f"{height:.1f}ms", ha='center', va='bottom', fontsize=9, fontweight='bold')
+        if height > 0:
+            plt.text(bar.get_x() + bar.get_width()/2.0, height + 0.05, f"{height:.1f}ms", ha='center', va='bottom', fontsize=8, fontweight='bold')
         
-    plt.title("Experiment 1: Eventual Consistency — Replication Lag", fontsize=13, fontweight='bold', pad=15)
-    plt.xlabel("Iteration (Trial No)", fontsize=11, labelpad=10)
+    plt.title("Experiment 1: Eventual Consistency — Replication Lag by CRUD Operation", fontsize=13, fontweight='bold', pad=15)
+    plt.xlabel("Iteration / Run No (Logical Order)", fontsize=11, labelpad=10)
     plt.ylabel("Lag (Milliseconds - ms)", fontsize=11, labelpad=10)
     plt.xticks(trials)
     plt.grid(axis='y', linestyle='--', alpha=0.5)
     
+    # Create legend patches for color representation
+    import matplotlib.patches as mpatches
+    insert_patch = mpatches.Patch(color='#E74C3C', label='INSERT Lag')
+    update_patch = mpatches.Patch(color='#2ECC71', label='UPDATE Lag')
+    delete_patch = mpatches.Patch(color='#3498DB', label='DELETE Lag')
+    
     # Add average line
-    avg_lag = sum(lags) / len(lags)
-    plt.axhline(avg_lag, color='#D0021B', linestyle=':', linewidth=2, label=f"Average: {avg_lag:.2f} ms")
-    plt.legend(loc="upper right", frameon=True, facecolor='white', edgecolor='none')
+    avg_lag = sum(lags) / len(lags) if lags else 0
+    avg_line = plt.axhline(avg_lag, color='#7F8C8D', linestyle=':', linewidth=2, label=f"Average: {avg_lag:.2f} ms")
+    
+    plt.legend(handles=[insert_patch, update_patch, delete_patch, avg_line], loc="upper right", frameon=True, facecolor='white', edgecolor='none')
     
     plt.tight_layout()
     output_path = os.path.join(RESULTS_DIR, "eventual_lag_plot.png")
@@ -81,40 +101,39 @@ def plot_monotonic_reads():
         
     # Single node data
     _, rows_s = res_single
-    reads_s = [int(row[0]) for row in rows_s[:20]]
-    versions_s = [int(row[2]) for row in rows_s[:20]]
+    reads_s = [int(row[0]) for row in rows_s[:70]]
+    versions_s = [int(row[2]) for row in rows_s[:70]]
     
     # Multi-node data
     _, rows_c = res_cross
-    reads_c = [int(row[0]) for row in rows_c[:20]]
-    versions_l = [int(row[2]) for row in rows_c[:20]]
-    versions_f = [int(row[3]) for row in rows_c[:20]]
+    reads_c = [int(row[0]) for row in rows_c[:70]]
+    versions_l = [int(row[2]) for row in rows_c[:70]]
+    versions_f = [int(row[3]) for row in rows_c[:70]]
     
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
     
     # Left Plot: Single Node
-    ax1.plot(reads_s, versions_s, marker='o', color='#2CA02C', linewidth=2.5, markersize=6, label="Follower Read")
+    ax1.plot(reads_s, versions_s, marker='o', color='#2CA02C', linewidth=2.5, markersize=4, label="Follower Read")
     ax1.set_title("A. Single Node Read (Follower Only)\n[Monotonic Reads Preserved]", fontsize=12, fontweight='bold', pad=10)
     ax1.set_xlabel("Sequential Read Count", fontsize=10)
-    ax1.set_ylabel("Read Version (Version)", fontsize=10)
+    ax1.set_ylabel("Read Version", fontsize=10)
     ax1.set_yticks(range(0, 13))
     ax1.grid(True, linestyle=':', alpha=0.6)
     ax1.legend(loc="lower right")
     
     # Right Plot: Multi-Node (Violation Scenario)
-    ax2.plot(reads_c, versions_l, marker='x', linestyle='--', color='#1F77B4', linewidth=1.8, label="Leader (Up-to-date)")
-    ax2.plot(reads_c, versions_f, marker='s', color='#D62728', linewidth=2.2, label="Follower (Lagged)")
+    ax2.plot(reads_c, versions_l, marker='x', linestyle='--', color='#1F77B4', linewidth=1.5, markersize=4, label="Leader (Up-to-date)")
+    ax2.plot(reads_c, versions_f, marker='s', color='#9467BD', linewidth=2, markersize=4, label="Follower (Lagged)")
     
-    # Annotate violations where Follower version is behind Leader version
-    for r, vl, vf in zip(reads_c, versions_l, versions_f):
-        if vf < vl:
-            ax2.annotate('VIOLATION!', xy=(r, vf), xytext=(r, vf - 1.2),
-                         arrowprops=dict(facecolor='#D62728', shrink=0.08, width=1, headwidth=5),
-                         fontsize=8, color='#D62728', fontweight='bold', ha='center')
-                         
+    # Highlight violations with red dots
+    violation_reads = [r for r, vl, vf in zip(reads_c, versions_l, versions_f) if vf < vl]
+    violation_versions = [vf for r, vl, vf in zip(reads_c, versions_l, versions_f) if vf < vl]
+    if violation_reads:
+        ax2.scatter(violation_reads, violation_versions, color='#D62728', zorder=5, label="Stale Read Violation", s=40)
+        
     ax2.set_title("B. Multi-Node Read (Leader -> Follower)\n[Monotonic Reads VIOLATION Demonstration]", fontsize=12, fontweight='bold', pad=10)
     ax2.set_xlabel("Sequential Read Count", fontsize=10)
-    ax2.set_ylabel("Read Version (Version)", fontsize=10)
+    ax2.set_ylabel("Read Version", fontsize=10)
     ax2.set_yticks(range(0, 13))
     ax2.grid(True, linestyle=':', alpha=0.6)
     ax2.legend(loc="lower right")
@@ -170,6 +189,100 @@ def plot_read_after_write():
     plt.close()
     print(f"Chart generated: {output_path}")
 
+def plot_concurrent_ordering():
+    """
+    Experiment 4: Concurrent Writes - Parallel Timeline Plot showing Global Ordering Preservation
+    """
+    res = load_csv_data("concurrent_order_results.csv")
+    if not res:
+        return
+    headers, rows = res
+    
+    from datetime import datetime
+    
+    # Parse times and details
+    parsed_rows = []
+    for row in rows:
+        try:
+            # Row index: 3 for Leader Commit, 4 for Follower Replicated, 1 for Write ID, 5 for TxID
+            t_leader = datetime.strptime(row[3], '%H:%M:%S.%f')
+            t_follower = datetime.strptime(row[4], '%H:%M:%S.%f')
+            write_id = int(row[1])
+            try:
+                txid = int(row[5])
+            except ValueError:
+                txid = write_id # Fallback
+            parsed_rows.append({
+                "write_id": write_id,
+                "txid": txid,
+                "t_leader": t_leader,
+                "t_follower": t_follower,
+                "l_time_str": row[3],
+                "f_time_str": row[4]
+            })
+        except Exception as e:
+            print(f"Error parsing row: {row}, error: {e}")
+            
+    if not parsed_rows:
+        return
+        
+    # Sort parsed_rows by txid/write_id to represent logical Leader commit order
+    parsed_rows = sorted(parsed_rows, key=lambda x: x["txid"])
+    
+    # Assign logical sequence index (y-coordinate)
+    for idx, item in enumerate(parsed_rows):
+        item["y_coordinate"] = idx + 1
+        
+    import matplotlib
+    matplotlib.use('Agg') # Ensure non-GUI backend
+    import matplotlib.pyplot as plt
+    
+    plt.figure(figsize=(11, 7))
+    
+    # Use premium red color for all lines
+    color = '#E74C3C'
+    
+    for idx, item in enumerate(parsed_rows):
+        x_points = [0, 1]
+        y_points = [item["y_coordinate"], item["y_coordinate"]]
+        
+        # Plot the horizontal line showing Rank_Leader == Rank_Follower
+        # Use single legend entry for all red lines
+        label_str = "Replicated Transactions (Order Preserved)" if idx == 0 else None
+        plt.plot(x_points, y_points, marker='o', color=color, linewidth=2.5, markersize=8, 
+                 label=label_str)
+        
+        # Extract milliseconds time only
+        l_time = item["l_time_str"]
+        f_time = item["f_time_str"]
+        
+        # Text annotation on the left (Leader): Write ID, TxID, and Commit Timestamp
+        plt.text(-0.02, item["y_coordinate"], f"W:{item['write_id']} (TxID:{item['txid']})\nCommit: {l_time}", 
+                 ha='right', va='center', fontsize=8, fontweight='bold', color=color)
+        
+        # Text annotation on the right (Follower): Write ID and Replay Timestamp
+        plt.text(1.02, item["y_coordinate"], f"W:{item['write_id']} (Replayed)\nVisible: {f_time}", 
+                 ha='left', va='center', fontsize=8, fontweight='bold', color=color)
+        
+    plt.title("Experiment 4: Global Ordering Preservation (FIFO Replication Proof)\n(Leader Commit Sequence maps 1-to-1 to Follower Replay Sequence)", fontsize=12, fontweight='bold', pad=15)
+    plt.xlabel("Database Node / Action", fontsize=11, labelpad=10)
+    plt.ylabel("Logical Execution Rank (FIFO Index)", fontsize=11, labelpad=10)
+    
+    plt.xticks([0, 1], ["Leader VM\n(Transaction Commit)", "Follower VM\n(Record Replicated)"], fontsize=10, fontweight='bold')
+    plt.yticks(range(1, len(parsed_rows) + 1), [f"Seq #{i}" for i in range(1, len(parsed_rows) + 1)], fontsize=9)
+    plt.grid(axis='y', linestyle=':', alpha=0.6)
+    
+    # Adjust layout to fit text annotations
+    plt.xlim(-0.30, 1.30)
+    plt.ylim(0.5, len(parsed_rows) + 0.5)
+    plt.legend(loc="upper left", bbox_to_anchor=(1.05, 1.0), frameon=True, fontsize=9)
+    
+    plt.tight_layout()
+    output_path = os.path.join(RESULTS_DIR, "concurrent_ordering_plot.png")
+    plt.savefig(output_path, dpi=300)
+    plt.close()
+    print(f"Chart generated: {output_path}")
+
 def generate_all_plots():
     """
     Draws charts for all experiments and saves them to the results/ folder.
@@ -183,8 +296,9 @@ def generate_all_plots():
         return
         
     plot_eventual_consistency()
-    plot_monotonic_reads()
+    # plot_monotonic_reads()  # Disabled based on user preference
     plot_read_after_write()
+    plot_concurrent_ordering()
     
     print("\nAll charts successfully generated and saved to the 'results/' folder.")
     print("They are ready to be included in your LaTeX report!")

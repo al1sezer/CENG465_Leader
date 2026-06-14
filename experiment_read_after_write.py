@@ -8,73 +8,49 @@ from logger import log_operation, log_info
 from utils import save_to_csv, save_to_json, print_table
 
 def run_read_after_write_experiment(iterations=10):
-    """
-    Read-After-Write (RAW) Consistency Experiment:
-    Tests if the client can see their own write operation (ticket reservation) immediately:
-      1. Verifies if they can see the data instantly when reading from the Leader (RAW guarantee).
-      2. Tests if the data is immediately visible when reading from the Follower (potential RAW violation).
-    Measures the visibility lag of the data on the Follower.
-    """
+    """Run read-after-write consistency experiment."""
     log_info("START: Read-After-Write (RAW) Consistency Experiment initiated", node="Exp3")
-    print("\n" + "=" * 60)
-    print("EXPERIMENT 3: READ-AFTER-WRITE CONSISTENCY (Read-Your-Own-Writes)")
-    print("=" * 60)
-    print(f"This experiment will be repeated for {iterations} different ticket reservations.")
-    print("The visibility lag of the client's own reservation will be measured on both the Leader and Follower.")
-    print("=" * 60)
+    print("\nEXPERIMENT 3: READ-AFTER-WRITE CONSISTENCY")
 
-    # Let's use a showtime (Showtime ID: 1, Inception Hall A) for the experiment.
-    # Use seats sequentially from A3 to A12 (Seat ID: 3 to 12).
     showtime_id = 1
     
-    # Ensure showtime with ID 1 exists dynamically (as showtimes table is empty initially)
     conn_prep = psycopg2.connect(**LEADER_DB)
     cur_prep = conn_prep.cursor()
     cur_prep.execute("SELECT id FROM showtimes WHERE id = %s;", (showtime_id,))
     if not cur_prep.fetchone():
-        print(f"Creating showtime {showtime_id} dynamically for the RAW experiment...")
         cur_prep.execute("INSERT INTO showtimes (id, movie_id, hall_id, show_date, show_time) VALUES (1, 1, 1, '2026-06-01', '14:00') ON CONFLICT (id) DO NOTHING;")
         conn_prep.commit()
     cur_prep.close()
     conn_prep.close()
     
     results = []
+    headers = ["Iteration", "Reservation ID", "Customer Name", "Leader Visibility (ms)", "Follower Immediate Visibility", "Follower Visibility (ms)", "Status"]
 
-    # CSV headers
-    headers = ["Iteration", "Reservation ID", "Customer Name", "Leader Visibility (ms)", "Follower Immediate Visibility", "Follower Visibility (ms)", "Query Count", "Status"]
-
-    # Print table header
-    print_headers = ["Iteration", "Seat", "Customer Name", "Commit Time (L)", "Visible Time (F)", "Leader Vis (ms)", "Follower Lag (ms)", "Query Count", "Status"]
-    col_widths = [9, 6, 26, 15, 16, 15, 17, 11, 36]
+    print_headers = ["Iteration", "Seat", "Customer Name", "Commit Time (L)", "Visible Time (F)", "Leader Vis (ms)", "Follower Lag (ms)", "Status"]
+    col_widths = [9, 6, 26, 15, 16, 15, 17, 36]
     row_format = " | ".join([f"{{:<{w}}}" for w in col_widths])
     border = "-+-".join(["-" * w for w in col_widths])
     
     print("\n" + border)
     print(row_format.format(*print_headers))
     print(border)
-
-    # Establish persistent connections to eliminate connection setup overhead
-    # Connection for Leader write operations
+    
     conn_l_write = psycopg2.connect(**LEADER_DB)
     cur_l_write = conn_l_write.cursor()
     
-    # Connection for Leader read check (Thread 1)
     conn_l_check = psycopg2.connect(**LEADER_DB)
     cur_l_check = conn_l_check.cursor()
     
-    # Connection for Follower read check (Thread 2)
     conn_f_check = psycopg2.connect(**FOLLOWER_DB)
     cur_f_check = conn_f_check.cursor()
 
     for i in range(1, iterations + 1):
-        seat_id = 2 + i  # Seats: 3, 4, 5, ..., 12
+        seat_id = 2 + i
         customer_name = f"RAW_Customer_{int(time.time())}_{i}"
         
         log_info(f"[{i}/{iterations}] Creating reservation on Leader: Customer={customer_name}, SeatID={seat_id}...", node="Exp3")
         
-        # A. WRITING TO LEADER
         t_write = datetime.now()
-        
         query_insert = """
             INSERT INTO reservations (showtime_id, seat_id, customer_name, status, version, last_updated, operation_id) 
             VALUES (%s, %s, %s, 'reserved', 1, %s, %s) RETURNING id;
@@ -85,51 +61,102 @@ def run_read_after_write_experiment(iterations=10):
         conn_l_write.commit()
         t_commit = datetime.now()
         
-        # Resolve seat label dynamically
         cur_l_write.execute("SELECT row_label || seat_number FROM seats WHERE id = %s;", (seat_id,))
         seat_label = cur_l_write.fetchone()[0]
         
-        # Shared thread outputs
         leader_res = {}
         follower_res = {}
+        leader_trace = []
+        follower_trace = []
         
-        # Thread 1: Leader Visibility Check
         def check_leader_visibility():
             try:
+                t_start = datetime.now()
                 cur_l_check.execute("SELECT customer_name FROM reservations WHERE id = %s;", (res_id,))
                 row_l = cur_l_check.fetchone()
                 t_end = datetime.now()
                 leader_res['visible'] = (row_l is not None)
                 leader_res['lag_ms'] = (t_end - t_commit).total_seconds() * 1000.0
+                
+                leader_trace.append({
+                    "time": t_end,
+                    "node": "Leader",
+                    "action": "Immediate Read Check",
+                    "sql": f"SELECT customer_name FROM reservations WHERE id = {res_id};",
+                    "result": f"Found '{row_l[0]}'" if row_l else "NULL / Not Found",
+                    "highlight": "RAW_SECURED" if row_l else "FAIL",
+                    "lag_ms": (t_end - t_commit).total_seconds() * 1000.0
+                })
             except Exception as e:
                 leader_res['visible'] = False
                 leader_res['lag_ms'] = -1.0
                 leader_res['error'] = str(e)
+                leader_trace.append({
+                    "time": datetime.now(),
+                    "node": "Leader",
+                    "action": "Immediate Read Check Error",
+                    "sql": f"SELECT customer_name FROM reservations WHERE id = {res_id};",
+                    "result": f"Error: {str(e)}",
+                    "highlight": "ERROR",
+                    "lag_ms": -1.0
+                })
                 
-        # Thread 2: Follower Visibility Check and Polling
         def check_follower_visibility():
             try:
-                # First immediate read check
                 t_read_first = datetime.now()
                 cur_f_check.execute("SELECT customer_name FROM reservations WHERE id = %s;", (res_id,))
                 row_f_first = cur_f_check.fetchone()
+                t_read_first_end = datetime.now()
                 
                 first_visible = (row_f_first is not None)
+                
+                follower_trace.append({
+                    "time": t_read_first_end,
+                    "node": "Follower",
+                    "action": "Immediate Read Check",
+                    "sql": f"SELECT customer_name FROM reservations WHERE id = {res_id};",
+                    "result": f"Found '{row_f_first[0]}'" if first_visible else "NULL / Not Found (Stale Read)",
+                    "highlight": "SUCCESS" if first_visible else "RAW_VIOLATION",
+                    "lag_ms": (t_read_first_end - t_commit).total_seconds() * 1000.0
+                })
+                
                 attempts = 1
                 t_poll_start = time.time()
                 visible_time = None
                 
                 if first_visible:
-                    visible_time = t_read_first
+                    visible_time = t_read_first_end
                 else:
-                    while time.time() - t_poll_start < 10:  # 10 seconds limit
+                    while time.time() - t_poll_start < 10:
                         attempts += 1
+                        t_attempt_start = datetime.now()
                         cur_f_check.execute("SELECT customer_name FROM reservations WHERE id = %s;", (res_id,))
                         row_f = cur_f_check.fetchone()
+                        t_attempt_end = datetime.now()
+                        
                         if row_f:
-                            visible_time = datetime.now()
+                            visible_time = t_attempt_end
+                            follower_trace.append({
+                                "time": t_attempt_end,
+                                "node": "Follower",
+                                "action": f"Polling (Attempt #{attempts})",
+                                "sql": f"SELECT customer_name FROM reservations WHERE id = {res_id};",
+                                "result": f"Found '{row_f[0]}'",
+                                "highlight": "REPLICATED",
+                                "lag_ms": (t_attempt_end - t_commit).total_seconds() * 1000.0
+                            })
                             break
-                        time.sleep(0.0005)  # 0.5ms wait
+                        else:
+                            follower_trace.append({
+                                "time": t_attempt_end,
+                                "node": "Follower",
+                                "action": f"Polling (Attempt #{attempts})",
+                                "sql": f"SELECT customer_name FROM reservations WHERE id = {res_id};",
+                                "result": "NULL / Not Found (Still lagging)",
+                                "highlight": "POLL_LAG",
+                                "lag_ms": (t_attempt_end - t_commit).total_seconds() * 1000.0
+                            })
+                        time.sleep(0.0005)
                         
                 follower_res['first_visible'] = first_visible
                 follower_res['attempts'] = attempts
@@ -143,8 +170,16 @@ def run_read_after_write_experiment(iterations=10):
                 follower_res['attempts'] = 0
                 follower_res['lag_ms'] = -1.0
                 follower_res['error'] = str(e)
+                follower_trace.append({
+                    "time": datetime.now(),
+                    "node": "Follower",
+                    "action": "Visibility Check Error",
+                    "sql": f"SELECT customer_name FROM reservations WHERE id = {res_id};",
+                    "result": f"Error: {str(e)}",
+                    "highlight": "ERROR",
+                    "lag_ms": -1.0
+                })
                 
-        # Start both checks in parallel threads
         t1 = threading.Thread(target=check_leader_visibility)
         t2 = threading.Thread(target=check_follower_visibility)
         
@@ -154,7 +189,6 @@ def run_read_after_write_experiment(iterations=10):
         t1.join()
         t2.join()
         
-        # Read thread outputs
         leader_visible = leader_res.get('visible', False)
         leader_lag_ms = leader_res.get('lag_ms', -1.0)
         
@@ -163,15 +197,68 @@ def run_read_after_write_experiment(iterations=10):
         follower_lag_ms = follower_res.get('lag_ms', -1.0)
         follower_visible_time = follower_res.get('visible_time', None)
         
-        # Log record (moved here so it doesn't add latency to replication check)
+        write_event = {
+            "time": t_commit,
+            "node": "Leader",
+            "action": "Write Reservation",
+            "sql": f"INSERT INTO reservations (showtime_id, seat_id, customer_name, status, version) VALUES ({showtime_id}, {seat_id}, '{customer_name}', 'reserved', 1);",
+            "result": f"Committed successfully (ID: {res_id}) in {(t_commit - t_write).total_seconds()*1000:.2f}ms",
+            "highlight": "WRITE_COMMIT",
+            "lag_ms": 0.0
+        }
+        
+        all_events = [write_event] + leader_trace + follower_trace
+        all_events.sort(key=lambda x: x["time"])
+        
+        sorted_trace = []
+        for ev in all_events:
+            sorted_trace.append({
+                "time": ev["time"].strftime('%H:%M:%S.%f')[:-3],
+                "node": ev["node"],
+                "action": ev["action"],
+                "sql": ev["sql"],
+                "result": ev["result"],
+                "highlight": ev["highlight"],
+                "lag_ms": ev.get("lag_ms", 0.0)
+            })
+
+        if i == 1:
+            print(f"\n>>> DETAILED REPLICATION TRACE FOR ITERATION {i} (Seat: {seat_label}, Res ID: {res_id}) <<<")
+            print("-" * 100)
+            for ev in sorted_trace:
+                timestamp = ev["time"]
+                node = ev["node"]
+                action = ev["action"]
+                sql = ev["sql"]
+                result = ev["result"]
+                highlight = ev["highlight"]
+                
+                color_start = ""
+                color_end = "\033[0m"
+                if highlight == "WRITE_COMMIT":
+                    color_start = "\033[94m"
+                elif highlight == "RAW_SECURED":
+                    color_start = "\033[92m"
+                elif highlight == "RAW_VIOLATION":
+                    color_start = "\033[91m"
+                elif highlight == "REPLICATED":
+                    color_start = "\033[92m"
+                elif highlight == "POLL_LAG":
+                    color_start = "\033[93m"
+                else:
+                    color_start = "\033[37m"
+                    
+                print(f"[{timestamp}] {color_start}[{node} - {action}]{color_end}")
+                print(f"    SQL   : {sql}")
+                print(f"    Result: {color_start}{result}{color_end}")
+            print("-" * 100 + "\n")
+        
         log_operation("INSERT", "reservations", res_id, {
             "customer_name": customer_name,
             "operation_id": op_id
         })
         
-        # D. ANALYSIS AND CALCULATION
         if follower_visible_time:
-            # Measure lag from t_commit (when replication actually started)
             violation = "VIOLATION (Could not see own write!)" if not first_read_visible else "NORMAL (Saw instantly)"
             
             if not first_read_visible:
@@ -184,8 +271,8 @@ def run_read_after_write_experiment(iterations=10):
                 leader_lag_ms, 
                 "Yes" if first_read_visible else "No", 
                 follower_lag_ms, 
-                attempts, 
-                violation
+                violation,
+                sorted_trace
             ])
             
             row = [
@@ -194,13 +281,12 @@ def run_read_after_write_experiment(iterations=10):
                 follower_visible_time.strftime('%H:%M:%S.%f')[:-3], 
                 f"{leader_lag_ms:.3f}", 
                 f"{follower_lag_ms:.2f}", 
-                str(attempts), 
                 violation
             ]
             print(row_format.format(*row))
         else:
             log_info(f"[{i}/{iterations}] ERROR: Record did not replicate on Follower within 10 seconds timeout!", node="Exp3")
-            results.append([i, res_id, customer_name, leader_lag_ms, "No", -1, attempts, "TIMEOUT"])
+            results.append([i, res_id, customer_name, leader_lag_ms, "No", -1, "TIMEOUT", sorted_trace])
             
             row = [
                 str(i), seat_label, customer_name, 
@@ -208,14 +294,12 @@ def run_read_after_write_experiment(iterations=10):
                 "TIMEOUT", 
                 f"{leader_lag_ms:.3f}", 
                 "-1.00", 
-                str(attempts), 
                 "TIMEOUT"
             ]
             print(row_format.format(*row))
             
         time.sleep(0.5)
 
-    # Close persistent connections
     cur_l_write.close()
     conn_l_write.close()
     cur_l_check.close()
@@ -225,10 +309,8 @@ def run_read_after_write_experiment(iterations=10):
 
     print(border)
 
-    # 4. Result Report and Statistics
-    
     total_runs = len(results)
-    violations_count = sum(1 for r in results if "VIOLATION" in r[7])
+    violations_count = sum(1 for r in results if "VIOLATION" in r[6])
     violation_rate = (violations_count / total_runs) * 100.0 if total_runs > 0 else 0
     
     valid_follower_lags = [r[5] for r in results if r[5] > 0]
@@ -241,12 +323,10 @@ def run_read_after_write_experiment(iterations=10):
     print(f"  Follower RAW Violation Count  : {violations_count}")
     print(f"  RAW Violation Rate            : {violation_rate:.1f}%")
     print(f"  Average Follower Visibility Lag : {avg_follower_lag:.2f} ms")
-    print(f"  Leader RAW Violation Count    : 0 (Always sees own write instantly)")
+    print(f"  Leader RAW Violation Count    : 0")
     print("=" * 60)
-
     
-    # Save to files
-    save_to_csv("raw_results.csv", headers, results)
+    save_to_csv("raw_results.csv", headers, [r[:7] for r in results])
     
     json_data = {
         "experiment": "Read-After-Write Consistency",
@@ -266,8 +346,8 @@ def run_read_after_write_experiment(iterations=10):
                 "leader_lag_ms": round(r[3], 3),
                 "follower_immediate_visible": r[4],
                 "follower_lag_ms": round(r[5], 2),
-                "attempts": r[6],
-                "status": r[7]
+                "status": r[6],
+                "trace": r[7]
             } for r in results
         ]
     }

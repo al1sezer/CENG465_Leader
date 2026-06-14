@@ -167,7 +167,8 @@ def run_experiment(name):
         elif name == "concurrent":
             # Run Experiment 4
             run_concurrent_writes_experiment()
-            # Note: no separate plot for concurrent writes, returning raw JSON output
+            # Update the chart
+            generate_all_plots()
             json_file = os.path.join(RESULTS_DIR, "concurrent_results.json")
             
         else:
