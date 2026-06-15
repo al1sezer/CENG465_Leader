@@ -1158,10 +1158,7 @@
                             <i class="fa-solid fa-circle-play"></i> Run Experiment
                         </button>
                     </div>
-                    
-                    <p style="color: var(--text-secondary); line-height: 1.6;">
-                        This experiment writes a batch of new movie records to the **Leader VM** and queries the **Follower VM** at high frequency (1ms polls) to measure how long it takes for the transaction to propagate.
-                    </p>
+
 
                     <div class="exp-showcase">
                         <div>
@@ -1209,11 +1206,7 @@
                             <i class="fa-solid fa-circle-play"></i> Run Experiment
                         </button>
                     </div>
-                    
-                    <p style="color: var(--text-secondary); line-height: 1.6; margin-bottom: 1.5rem;">
-                        This experiment simulates rapid writes updating a single booking's version on the **Leader VM**. 
-                        It tests two client models: **Test A (Single Node Reads)** directly on the Follower which preserves monotonic consistency, and **Test B (Cross Node Reads)** jumping from Leader to lagged Follower, which demonstrates the classic version rollback violation.
-                    </p>
+
 
                     <div style="display: flex; gap: 10px; margin-bottom: 15px; align-items: center; margin-top: 1rem;">
                         <span style="font-size: 0.95rem; color: var(--text-secondary);"><i class="fa-solid fa-list-check" style="color: var(--accent-purple); margin-right: 5px;"></i>Select Read Scenario:</span>
@@ -1268,10 +1261,7 @@
                             <i class="fa-solid fa-circle-play"></i> Run Experiment
                         </button>
                     </div>
-                    
-                    <p style="color: var(--text-secondary); line-height: 1.6;">
-                        Simulates a client booking a seat. It verifies whether the client can immediately see their reservation when querying the **Leader** (guaranteed RAW consistency) versus the **Follower** (where replication lag may result in temporary invisibility, violating RAW).
-                    </p>
+
 
                     <div class="exp-showcase">
                         <div>
@@ -1327,9 +1317,7 @@
                         <!-- Part A -->
                         <div>
                             <h4>Part A: Global Ordering Verification (10 Parallel Threads)</h4>
-                            <p style="color: var(--text-secondary); font-size: 0.9rem; margin-top: 5px; margin-bottom: 10px;">
-                                Fires 10 reservation queries concurrently. This demonstrates that because PostgreSQL replication uses a single sequence log, the commit order on the Leader is strictly preserved on the Follower replica (Zero out-of-order replication).
-                            </p>
+
                             <div class="table-container" style="max-height: 250px; overflow-y: auto;">
                                 <table>
                                     <thead>
@@ -1340,13 +1328,11 @@
                                             <th>Leader Commit Time</th>
                                             <th>Follower Replicated Time</th>
                                             <th>TxID</th>
-                                            <th>LSN (Leader)</th>
-                                            <th>LSN (Follower)</th>
                                             <th>Status</th>
                                         </tr>
                                     </thead>
                                     <tbody id="concurrent-order-body">
-                                        <tr><td colspan="9" style="text-align: center; color: var(--text-secondary);">Run the experiment to see multi-threaded ordering.</td></tr>
+                                        <tr><td colspan="7" style="text-align: center; color: var(--text-secondary);">Run the experiment to see multi-threaded ordering.</td></tr>
                                     </tbody>
                                 </table>
                             </div>
@@ -1361,9 +1347,7 @@
                         <!-- Part B -->
                         <div>
                             <h4>Part B: Race Condition & Double Booking Demonstration</h4>
-                            <p style="color: var(--text-secondary); font-size: 0.9rem; margin-top: 5px; margin-bottom: 15px;">
-                                Fires 2 threads trying to book the exact same seat (Showtime 1, Seat 10) at the exact same millisecond. Demonstrates how application-level checks without locking result in **Double Booking** (Race Condition).
-                            </p>
+
                             
                             <div class="racer-results" id="racer-cards-container">
                                 <!-- Racer cards -->
@@ -1823,14 +1807,12 @@
                             <td class="op-mono">${item.leader_time}</td>
                             <td class="op-mono">${item.follower_time}</td>
                             <td class="op-mono" style="color: var(--accent-blue);">${item.txid}</td>
-                            <td class="op-mono" style="font-size:0.8rem; color: var(--text-secondary);">${item.lsn_leader}</td>
-                            <td class="op-mono" style="font-size:0.8rem; color: var(--text-secondary);">${item.lsn_follower}</td>
                             <td><span class="badge badge-success">${item.status}</span></td>
                         </tr>
                     `;
                 });
             } else {
-                tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; color: var(--text-secondary);">No concurrent ordering data available.</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="7" style="text-align: center; color: var(--text-secondary);">No concurrent ordering data available.</td></tr>`;
             }
             
             // Render Visual Chart

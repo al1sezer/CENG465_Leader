@@ -16,11 +16,7 @@ def run_monotonic_reads_experiment(interactive=False):
     
     conn_l = psycopg2.connect(**LEADER_DB)
     cur_l = conn_l.cursor()
-    
-    cur_l.execute("SELECT setval(pg_get_serial_sequence('showtimes', 'id'), COALESCE(MAX(id), 1)) FROM showtimes;")
-    cur_l.execute("SELECT setval(pg_get_serial_sequence('movies', 'id'), COALESCE(MAX(id), 1)) FROM movies;")
-    cur_l.execute("SELECT setval(pg_get_serial_sequence('reservations', 'id'), COALESCE(MAX(id), 1)) FROM reservations;")
-    
+
     cur_l.execute("INSERT INTO movies (title, genre, duration_min) VALUES (%s, 'Sci-Fi', 150) RETURNING id;", (movie_title,))
     movie_id = cur_l.fetchone()[0]
     

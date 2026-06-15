@@ -7,7 +7,7 @@ from logger import log_operation, log_info
 from utils import save_to_csv, save_to_json
 
 def run_eventual_consistency_experiment(iterations=10, use_persistent=False):
-    """Run eventual consistency experiment measuring replication lag."""
+    """Eventual Consistency """
     log_info(f"START: Eventual Consistency Experiment (Lag Test) initiated (use_persistent={use_persistent})", node="Exp1")
     print("\nEXPERIMENT 1: EVENTUAL CONSISTENCY (Replication Lag)")
 
@@ -22,15 +22,6 @@ def run_eventual_consistency_experiment(iterations=10, use_persistent=False):
     print(row_format.format(*headers))
     print(border)
     
-    conn_sync = psycopg2.connect(**LEADER_DB)
-    cur_sync = conn_sync.cursor()
-    cur_sync.execute("SELECT setval(pg_get_serial_sequence('movies', 'id'), COALESCE(MAX(id), 1)) FROM movies;")
-    cur_sync.execute("SELECT setval(pg_get_serial_sequence('showtimes', 'id'), COALESCE(MAX(id), 1)) FROM showtimes;")
-    cur_sync.execute("SELECT setval(pg_get_serial_sequence('reservations', 'id'), COALESCE(MAX(id), 1)) FROM reservations;")
-    conn_sync.commit()
-    cur_sync.close()
-    conn_sync.close()
-    
     conn_l_persist = None
     cur_l_persist = None
     conn_f_persist = None
@@ -43,13 +34,13 @@ def run_eventual_consistency_experiment(iterations=10, use_persistent=False):
         cur_f_persist = conn_f_persist.cursor()
     
     run_counter = 0
+    
     for i in range(1, iterations + 1):
         movie_title_base = f"Exp1_Movie_{int(time.time())}_{i}"
         genre = "Thriller"
         duration = 120 + i
         operation_id = str(uuid.uuid4())
         
-        # 1. INSERT
         run_counter += 1
         movie_title_insert = f"{movie_title_base}_INSERT"
         log_info(f"[{i}/{iterations}] [INSERT] Writing movie: '{movie_title_insert}' to Leader...", node="Exp1")
@@ -89,6 +80,7 @@ def run_eventual_consistency_experiment(iterations=10, use_persistent=False):
         t_poll_start = time.time()
         t_visible = None
         attempts = 0
+        
         while time.time() - t_poll_start < 15:
             attempts += 1
             cur_f.execute("SELECT last_updated FROM movies WHERE id = %s;", (record_id,))
@@ -126,7 +118,6 @@ def run_eventual_consistency_experiment(iterations=10, use_persistent=False):
         
         time.sleep(0.2)
         
-        # 2. UPDATE
         run_counter += 1
         movie_title_update = f"{movie_title_base}_UPDATE"
         log_info(f"[{i}/{iterations}] [UPDATE] Updating movie ID {record_id} to '{movie_title_update}' on Leader...", node="Exp1")
@@ -164,6 +155,7 @@ def run_eventual_consistency_experiment(iterations=10, use_persistent=False):
         t_poll_start = time.time()
         t_visible_update = None
         attempts = 0
+        
         while time.time() - t_poll_start < 15:
             attempts += 1
             cur_f.execute("SELECT version, title FROM movies WHERE id = %s;", (record_id,))
@@ -201,7 +193,6 @@ def run_eventual_consistency_experiment(iterations=10, use_persistent=False):
         
         time.sleep(0.2)
         
-        # 3. DELETE
         run_counter += 1
         movie_title_delete = f"{movie_title_base}_DELETE"
         log_info(f"[{i}/{iterations}] [DELETE] Deleting movie ID {record_id} on Leader...", node="Exp1")
@@ -236,6 +227,7 @@ def run_eventual_consistency_experiment(iterations=10, use_persistent=False):
         t_poll_start = time.time()
         t_visible_delete = None
         attempts = 0
+        
         while time.time() - t_poll_start < 15:
             attempts += 1
             cur_f.execute("SELECT id FROM movies WHERE id = %s;", (record_id,))
