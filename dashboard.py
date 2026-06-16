@@ -15,7 +15,7 @@ try:
 except ImportError as e:
     print(f"WARNING: Experiment files could not be loaded: {e}")
 
-app = Flask(__name__, template_folder="templates")
+app = Flask(__name__, template_folder="web")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 RESULTS_DIR = os.path.join(BASE_DIR, "results")
